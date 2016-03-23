@@ -14,10 +14,12 @@ using namespace std;
  * Const values
  ************************************************************/
 static const char* HERO_NAME[] = {"Hammerguard", "Master", "Berserker", "Scouter"};
-static const Pos KEY_POINTS[] = {Pos(75, 146), Pos(116, 114), Pos(136, 76), Pos(117, 33),
-                                 Pos(75, 23), Pos(36, 37), Pos(27, 76), Pos(35, 110)};
+static const Pos KEY_POINTS[] = {
+        Pos(75, 146), Pos(116, 114), Pos(136, 76), Pos(117, 33),
+        Pos(75, 23), Pos(36, 37), Pos(27, 76), Pos(35, 110)
+};
 
-// unchanged values (during the game)
+// unchanged values (during the entire game)
 static int CAMP = -1;                       // which camp
 
 
@@ -34,7 +36,6 @@ static vector<PUnit*> current_friends;
 static vector<PUnit*> vi_enemies;
 // commander order
 static vector<Pos> needBackup;              // 某些位置请求支援
-
 static int baser[2] = {};                   // 这3个数组为每个点分配的战斗人员数量,
 static int miner[7] = {};                   // 机制:需要[再]增加一个单位时+1,
 static int point_taker[8] = {};             // 新加入一个支援单位-1,最小可以为负,表示不需要如此多战斗人员
@@ -43,11 +44,11 @@ static int point_taker[8] = {};             // 新加入一个支援单位-1,最
 /************************************************************
  * Storage data
  ************************************************************/
-static vector<int> stored_money;                    // 之前几个回合的money信息
-static vector<int> stored_enemy_money;              //
-static vector<string> stored_friends;               //
-static vector<string> stored_enemies;               //
-static vector<string> stored_backup;                //
+static vector<int> stored_money;                    //
+static vector<int> stored_enemy_money;              // 之前几个回合的money信息
+static vector<vector<string>> stored_friends;       // 以heroes为原型
+static vector<vector<string>> stored_enemies;       // 以heroes为原型
+static vector<string> stored_backup;                // 以pos为原型
 
 
 
@@ -57,6 +58,17 @@ static vector<string> stored_backup;                //
 static ofstream fout("log_info.txt");
 void printUnit(vector<PUnit*> units);
 #endif
+
+// handling stored data
+template <typename T> void clearOldInfo(vector<T> vct);             // 及时清理陈旧储存信息
+int string2Money(string stored);
+Hero& storedHero(PUnit* hero, int prev_n);                          // prev_n轮之前的同一Hero
+Pos& string2Pos(string stored);
+
+// handling units
+vector<int> sumUnits(vector<PUnit*> units);                         // 返回单位组的hp,atk,def
+int vsResult(vector<int> a, vector<int> b);                         // -1: a胜; 0: 平; 1: b胜
+int vsResult(PUnit* a, PUnit* b);                                   //
 
 
 
@@ -73,6 +85,7 @@ protected:
     void getUnits();
 
 public:
+    void storeEconomy();
     // run observer
     void observeGame();
 };
@@ -90,11 +103,10 @@ struct Commander {
     int situation = 0;  // 分析战场局势
 
     // helper
-    void changeTeams();
     string storeUnit(PUnit* unit);                  // 将单位信息存储成string,记录以便下回合使用
-    void readUnit(string info, Hero* hero);         // 读取string,展开成一个Hero对象
 
-    // todo 分析战局
+    // battle analysis
+
 
 
 };
@@ -103,16 +115,17 @@ struct Commander {
 /************************************************************
  * Heroes
  ************************************************************/
+// 实际上是一个友方英雄类,敌方英雄暂无必要考虑
 // attack_state: negative, positive
 // move_state: still, move
 // skill_state: restricted, available
-// safe_env: safe, dangerous, dangerous
+// safe_env: safe, dangerous, dying
 // fight_env: nothing, inferior, equal, superior
 
 class Hero {
 private:
     PUnit* this_hero;
-    // evironment
+    // environment
     int safety_env;
     int fight_env;
     // state
@@ -121,8 +134,29 @@ private:
     int skill_state;
 
 protected:
-    bool isSafe();
-    void underAttack();                         // ??是否承受攻击,无设定defendFrom为nullptr
+    // helpers
+    int holdRounds();                           // 按上一回合状态,尚可支撑的回合数
+    vector<PUnit*> view_enemy();                // 视野内敌人
+    vector<PUnit*> view_friend();               // 视野内队友,包含自己??
+    // judge
+    void safetyEnv();                           // 判断安全现状
+    void fightEnv();                            // 判断战斗势态
+    // actions
+    void callBackup();                          // 请求支援
+    void fastFlee();                            // 快速逃窜
+    void chaseAttack();                         // 追击
+    void hardAttack();                          // 全力攻击
+    void hitRun();                              // 诱敌
+    void stayAlarmed();                         // 淡定警戒 -- 不主动攻击,但还击或随时准备做动作,适合挖矿
+
+public:
+    // constructor/destructor
+    Hero(PUnit* hero);
+    ~Hero() {
+        delete this_hero;
+    }
+
+    // set state and env
     void setEnv(
             int safety = -1,
             int fight = -1
@@ -132,22 +166,8 @@ protected:
             int move = -1,
             int skill = -1
     );                                          // 如果是-1,不改变当前值
-
-public:
-    // todo constructor/deconstructor
-    Hero(PUnit* hero) :
-            this_hero(hero)
-                    {}
-    // todo 零散的待整理的高级动作
-    void callBackup();              // 请求支援
-    void fastFlee();                // 快速逃窜
-    void chaseAttack();             // 追击
-    void hardAttack();              // 全力攻击
-    void hitRun();                  // 诱敌
-    void stayAlarmed();             // 淡定警戒 -- 不主动攻击,但还击或随时准备做动作,适合挖矿
-    // decision maker & actions
-    void selectAction();            // 考虑所有state的组合
-
+    // decision maker
+    void selectAction();                        // 考虑所有state的组合
 };
 
 
@@ -158,6 +178,7 @@ void player_ai(const PMap &map, const PPlayerInfo &info, PCommand &cmd) {
     // 获取比赛信息
     Observer* observer = new Observer();
     observer->observeGame();
+    observer->storeEconomy();
 
 
 
@@ -172,6 +193,7 @@ void player_ai(const PMap &map, const PPlayerInfo &info, PCommand &cmd) {
  * Implementation: Assistant function
  ************************************************************/
 #ifdef LOG
+// log related
 void printUnit(vector<PUnit *> units) {
     // if hero
     if (units[0]->isHero()) {
@@ -232,6 +254,8 @@ void printUnit(vector<PUnit *> units) {
 }
 #endif
 
+// handling stored data
+
 
 /************************************************************
  * Implementation: class Observer
@@ -267,12 +291,80 @@ void Observer::observeGame() {
 #endif
 }
 
+void Observer::storeEconomy() {
+    clearOldInfo(stored_money);
+    clearOldInfo(stored_enemy_money);
+    stored_money.push_back(my_money);
+    stored_enemy_money.push_back(enemy_money);
+}
+
 
 /************************************************************
- * Implementation:
+ * Implementation: class Commander
  ************************************************************/
 
 
 /************************************************************
- * Implementation:
+ * Implementation: class Hero
  ************************************************************/
+// protected
+void Hero::safetyEnv() {
+    /*
+     * 策略: 常数 ALERT(血量百分比) HOLD(坚持回合,int)
+     * 1.计算与上回合血量差,按照此伤害程度,再过HOLD回合内死亡的,dying
+     * 2.血量超过ALERT,计算视野中敌人和我方的对战结果,先死亡的,dangerous
+     * 3.血量超过ALERT,计算视野中敌人和我方的对战结果,后死亡的,safe(包括没遇到任何敌人)
+     * 4.血量不超过ALERT,计算对战,先死亡的,dying
+     * 5.血量不超过ALERT,计算对战,后死亡的,dangerous
+     */
+    const double ALERT = 0.25;
+    const int HOLD = 3;
+    // 1
+    int holds = holdRounds();
+    if (holds < HOLD) {
+        safety_env = 2;
+        return;
+    }
+    // 2-5
+    int hp = this_hero->hp;
+    int max_hp = this_hero->max_hp;
+    vector<int> sum_enemy = sumUnits(view_enemy());
+    vector<int> sum_friend = sumUnits(view_friend());
+    int vs_result = vsResult(sum_enemy, sum_friend);
+    if (hp > ALERT * max_hp) {
+        if (vs_result == -1) {
+            safety_env = 1;
+            return;
+        } else {
+            safety_env = 0;
+            return;
+        }
+    } else {
+        if (vs_result == -1) {
+            safety_env = 2;
+            return;
+        } else {
+            safety_env = 1;
+            return;
+        }
+    }
+}
+
+
+// public
+Hero::Hero(PUnit *hero) {
+    this_hero = hero;
+    // 如果是敌人英雄,则不设置参数
+    if (hero->camp != CAMP)
+        return;
+    // 设置参数
+    Hero last_hero = storedHero(this_hero, 1);
+    safety_env = last_hero.safety_env;
+    fight_env = last_hero.fight_env;
+    atk_state = last_hero.atk_state;
+    move_state = last_hero.move_state;
+    skill_state = last_hero.skill_state;
+}
+
+
+
