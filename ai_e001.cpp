@@ -117,30 +117,14 @@ protected:
 public:
     // todo constructor/deconstructor
     // todo 零散的待整理的高级动作
-    virtual void fastFlee() = 0;                // 快速逃窜
-    virtual void chaseAttack() = 0;             // 追击
-    virtual void hardAttack() = 0;              // 全力攻击
-    virtual void hitRun() = 0;                  // 诱敌
-    virtual void stayAlarmed() = 0;             // 淡定警戒 -- 不主动攻击,但还击或随时准备做动作,适合挖矿
+    void callBackup();              // 请求支援
+    void fastFlee();                // 快速逃窜
+    void chaseAttack();             // 追击
+    void hardAttack();              // 全力攻击
+    void hitRun();                  // 诱敌
+    void stayAlarmed();             // 淡定警戒 -- 不主动攻击,但还击或随时准备做动作,适合挖矿
     // decision maker & actions
-    void selectAction();                        // 考虑所有state的组合
-
-};
-
-/***************** Derived classes **************************/
-class Hammerguard : public Hero {
-
-};
-
-class Master : public Hero {
-
-};
-
-class Berserker : public Hero {
-
-};
-
-class Scouter : public Hero {
+    void selectAction();            // 考虑所有state的组合
 
 };
 
