@@ -2,7 +2,6 @@
 #include <fstream>
 #include <vector>
 #include <string>
-#include <tkDecls.h>
 #include <iomanip>
 
 using namespace std;
@@ -10,7 +9,6 @@ using namespace std;
 // 调试开关
 #define LOG
 
-#define SIZE(X) (int((x).size()))
 /*######################## DATA ###########################*/
 /************************************************************
  * Const values
@@ -22,8 +20,9 @@ static const Pos KEY_POINTS[] = {Pos(75, 146), Pos(116, 114), Pos(136, 76), Pos(
 // unchanged values (during the game)
 static int CAMP = -1;                       // which camp
 
+
 /************************************************************
- * Sharing values
+ * Real-time sharing values
  ************************************************************/
 static Console* console = nullptr;
 
@@ -35,18 +34,31 @@ static vector<PUnit*> current_friends;
 static vector<PUnit*> vi_enemies;
 // commander order
 static vector<Pos> needBackup;              // 某些位置请求支援
+
 static int baser[2] = {};                   // 这3个数组为每个点分配的战斗人员数量,
 static int miner[7] = {};                   // 机制:需要[再]增加一个单位时+1,
 static int point_taker[8] = {};             // 新加入一个支援单位-1,最小可以为负,表示不需要如此多战斗人员
 
+
+/************************************************************
+ * Storage data
+ ************************************************************/
+static vector<int> stored_money;                    // 之前几个回合的money信息
+static vector<int> stored_enemy_money;              //
+static vector<string> stored_friends;               //
+static vector<string> stored_enemies;               //
+static vector<string> stored_backup;                //
+
+
+
 /*################# Assistant functions ####################*/
-void getWeakestUnit(vector<PUnit*> units, PUnit* weakest);
-void getStrongestUnit(vector<PUnit*> units, PUnit* strongest);
 // log related
 #ifdef LOG
 static ofstream fout("log_info.txt");
 void printUnit(vector<PUnit*> units);
 #endif
+
+
 
 /*##################### STATEMENT ##########################*/
 /************************************************************
@@ -65,6 +77,7 @@ public:
     void observeGame();
 };
 
+
 /************************************************************
  * Global commander
  ************************************************************/
@@ -78,44 +91,53 @@ struct Commander {
 
     // helper
     void changeTeams();
+    string storeUnit(PUnit* unit);                  // 将单位信息存储成string,记录以便下回合使用
+    void readUnit(string info, Hero* hero);         // 读取string,展开成一个Hero对象
 
     // todo 分析战局
-
-    // todo 设置重点战区
 
 
 };
 
+
 /************************************************************
  * Heroes
  ************************************************************/
-// attack_state: positive, negative
-// safe_state: dying, dangerous, safe
-// fight_state: nothing, inferior, equal, superior
+// attack_state: negative, positive
+// move_state: still, move
+// skill_state: restricted, available
+// safe_env: safe, dangerous, dangerous
+// fight_env: nothing, inferior, equal, superior
 
 class Hero {
 private:
     PUnit* this_hero;
-    Pos* position;
-    int hp, mp;
-    int attack, defend;
-    PBuff* buff;
-    // fight??
-    PUnit* attackOn;                            // 正在攻击此单位
-    PUnit* defendFrom;                          // 承受来自此单位攻击
+    // evironment
+    int safety_env;
+    int fight_env;
     // state
     int atk_state;
-    int safety_state;
-    int fight_state;
+    int move_state;
+    int skill_state;
 
 protected:
     bool isSafe();
     void underAttack();                         // ??是否承受攻击,无设定defendFrom为nullptr
-    void setState(int atk = 0, int sft = 0, int ft = 0);
-                                                // 若为0,则不设置
+    void setEnv(
+            int safety = -1,
+            int fight = -1
+    );
+    void setState(
+            int atk = -1,
+            int move = -1,
+            int skill = -1
+    );                                          // 如果是-1,不改变当前值
 
 public:
     // todo constructor/deconstructor
+    Hero(PUnit* hero) :
+            this_hero(hero)
+                    {}
     // todo 零散的待整理的高级动作
     void callBackup();              // 请求支援
     void fastFlee();                // 快速逃窜
@@ -127,6 +149,7 @@ public:
     void selectAction();            // 考虑所有state的组合
 
 };
+
 
 
 /*#################### MAIN FUNCTION #######################*/
@@ -209,6 +232,7 @@ void printUnit(vector<PUnit *> units) {
 }
 #endif
 
+
 /************************************************************
  * Implementation: class Observer
  ************************************************************/
@@ -247,6 +271,7 @@ void Observer::observeGame() {
 /************************************************************
  * Implementation:
  ************************************************************/
+
 
 /************************************************************
  * Implementation:
