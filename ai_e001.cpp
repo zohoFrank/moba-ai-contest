@@ -1,12 +1,16 @@
 #include "console.h"
+#include <fstream>
 #include <vector>
 #include <string>
+#include <tkDecls.h>
+#include <iomanip>
+
 using namespace std;
 
 // 调试开关
 #define LOG
 
-#define SIZE(X) (int(x.size()))
+#define SIZE(X) (int((x).size()))
 /*######################## DATA ###########################*/
 /************************************************************
  * Const values
@@ -38,8 +42,11 @@ static int point_taker[8] = {};             // 新加入一个支援单位-1,最
 /*################# Assistant functions ####################*/
 void getWeakestUnit(vector<PUnit*> units, PUnit* weakest);
 void getStrongestUnit(vector<PUnit*> units, PUnit* strongest);
-
-
+// log related
+#ifdef LOG
+static ofstream fout("log_info.txt");
+void printUnit(vector<PUnit*> units);
+#endif
 
 /*##################### STATEMENT ##########################*/
 /************************************************************
@@ -50,7 +57,6 @@ void getStrongestUnit(vector<PUnit*> units, PUnit* strongest);
 class Observer {
 protected:
     // helpers
-    void getBasicInfo();
     void getEconomyInfo();
     void getUnits();
 
@@ -142,9 +148,13 @@ class Scouter : public Hero {
 /*#################### MAIN FUNCTION #######################*/
 void player_ai(const PMap &map, const PPlayerInfo &info, PCommand &cmd) {
     console = new Console(map, info, cmd);
+    // 获取比赛信息
+    Observer* observer = new Observer();
+    observer->observeGame();
 
 
 
+    delete observer;
     delete console;
 }
 
@@ -152,13 +162,72 @@ void player_ai(const PMap &map, const PPlayerInfo &info, PCommand &cmd) {
 
 /*################### IMPLEMENTATION #######################*/
 /************************************************************
+ * Implementation: Assistant function
+ ************************************************************/
+#ifdef LOG
+void printUnit(vector<PUnit *> units) {
+    // if hero
+    if (units[0]->isHero()) {
+        // print title of each column
+        fout << left << setw(6) << "TYPE";
+        fout << left << setw(16) << "NAME";
+        fout << left << setw(5) << "ID";
+        fout << left << setw(5) << "LEVEL";
+        fout << left << setw(5) << "HP";
+        fout << left << setw(5) << "MP";
+        fout << left << setw(5) << "ATK";
+        fout << left << setw(5) << "DEF";
+        fout << left << setw(10) << "POS";
+        fout << left << setw(10) << "BUFF";
+        fout << endl;
+        // print content
+        for (int i = 0; i < units.size(); ++i) {
+            PUnit* unit = units[i];
+            // print basic hero info
+            fout << left << setw(6) << "Hero";
+            fout << left << setw(16) << unit->name;
+            fout << left << setw(5) << unit->id;
+            fout << left << setw(5) << unit->level;
+            fout << left << setw(5) << unit->hp;
+            fout << left << setw(5) << unit->mp;
+            fout << left << setw(5) << unit->atk;
+            fout << left << setw(5) << unit->def;
+            fout << left << setw(10) << unit->pos;
+            // print buff
+            vector<PBuff> buff = unit->buffs;
+            for (int j = 0; j < buff.size(); ++j) {
+                fout << left << setw(15) << buff[j].name << "(" << buff[j].timeLeft << ")";
+            }
+            // over
+            fout << endl;
+        }
+        return;
+    }
+
+    // if mine or base
+    if (units[0]->isMine()) {
+        // print titles
+        fout << left << setw(10) << "POS";
+        fout << left << setw(6) << "CAMP";
+        fout << left << setw(5) << "HP";
+        fout << endl;
+        // print content
+        for (int i = 0; i < units.size(); ++i) {
+            PUnit* unit = units[i];
+            fout << left << setw(10) << unit->pos;
+            fout << left << setw(6) << unit->camp;
+            fout << left << setw(5) << unit->hp;
+            fout << endl;
+        }
+    }
+    return;
+
+}
+#endif
+
+/************************************************************
  * Implementation: class Observer
  ************************************************************/
-void Observer::getBasicInfo() {
-    Round = console->round();
-    CAMP = console->camp();
-}
-
 void Observer::getEconomyInfo() {
     my_money = console->gold();
 }
@@ -169,10 +238,25 @@ void Observer::getUnits() {
 }
 
 void Observer::observeGame() {
-    if (Round == 0)
-        getBasicInfo();
+    if (Round == 0) {
+        CAMP = console->camp();
+#ifdef LOG
+        fout << "==== Game begins ====" << endl;
+        fout << "camp: " << CAMP << endl;
+#endif
+    }
+    Round = console->round();
     getEconomyInfo();
     getUnits();
+#ifdef LOG
+    fout << "==== Round: " << Round << " ====" << endl;
+    fout << "my money: " << my_money << endl;
+    fout << "Hero info: " << endl;
+    fout << "//FRIEND//" << endl;
+    printUnit(current_friends);
+    fout << "//VISIBLE ENEMY//" << endl;
+    printUnit(vi_enemies);
+#endif
 }
 
 
