@@ -100,16 +100,20 @@ public:
 /************************************************************
  * Global commander
  ************************************************************/
-// 全局指挥官,分析形势,买活,升级,召回等
+// 全局指挥官,分析形势,买活,升级,召回等,也充当本方base角色
 // 更新不同战区信息,units可以领任务,然后形成team
 // global_state: inferior, equal, superior
 
-struct Commander {
+struct Commander {  // todo建议全部详细重新考虑
     int tactic = 0;     // 设置战术代号
     int situation = 0;  // 分析战场局势
 
     // helper
     string storeUnit(PUnit* unit);                  // 将单位信息存储成string,记录以便下回合使用
+    void attack(PUnit* unit);
+    void buyNewHero(char* name);                    // 买英雄
+    void levelUp(PUnit* hero);                      // 升级英雄
+    void callBack(PUnit* hero);                     // 召回英雄
 
     // battle analysis
     // todo
@@ -400,16 +404,23 @@ void Observer::storeEconomy() {
 
 // protected judge
 void Hero::safetyEnv() {
+    // safe_env: safe, dangerous, dying
     /*
      * 策略: 常数 ALERT(血量百分比) HOLD(坚持回合,int)
+     * 0.视野里没有敌方的,safe.
      * 1.计算与上回合血量差,按照此伤害程度,再过HOLD回合内死亡的,dying
-     * 2.血量超过ALERT,计算视野中敌人和我方的对战结果,先死亡的,dangerous
-     * 3.血量超过ALERT,计算视野中敌人和我方的对战结果,后死亡的,safe(包括没遇到任何敌人)
+     * 2.血量超过ALERT,计算近距离敌人和我方的对战结果,先死亡的,dangerous
+     * 3.血量超过ALERT,计算近距离敌人和我方的对战结果,后死亡的,safe(包括没遇到任何敌人)
      * 4.血量不超过ALERT,计算对战,先死亡的,dying
      * 5.血量不超过ALERT,计算对战,后死亡的,dangerous
      */
     const double ALERT = 0.25;
     const int HOLD = 3;
+    // 0
+    if (view_enemy().empty()) {
+        safety_env = 0;
+        return;
+    }
     // 1
     int holds = holdRounds();
     if (holds < HOLD) {
@@ -450,12 +461,11 @@ Hero::Hero(PUnit *hero) {
     type = this_hero->typeId;
     id = this_hero->id;
     // 延续上一回合决策
-    Hero last_hero = storedHero(this_hero, 1);
-    safety_env = last_hero.safety_env;
-    fight_env = last_hero.fight_env;
-    atk_state = last_hero.atk_state;
-    move_state = last_hero.move_state;
-    skill_state = last_hero.skill_state;
+    safety_env = storedHero(this_hero, 1, "safe_e");
+    fight_env = storedHero(this_hero, 1, "fight_e");
+    atk_state = storedHero(this_hero, 1, "atk_s");
+    move_state = storedHero(this_hero, 1, "move_s");
+    skill_state = storedHero(this_hero, 1, "skill_s");
 }
 
 // public set state and env
