@@ -18,6 +18,9 @@ static const Pos KEY_POINTS[] = {
         Pos(75, 146), Pos(116, 114), Pos(136, 76), Pos(117, 33),
         Pos(75, 23), Pos(36, 37), Pos(27, 76), Pos(35, 110)
 };
+static const int CLEAN_LIMIT = 10;      // 最多保留回合记录
+static const int CLEAN_NUMS = 5;        // 超过最多保留记录后,一次清理数据组数
+static const int NEAR_RANGE = 44;       // 判定靠近的常数
 
 // unchanged values (during the entire game)
 static int CAMP = -1;                       // which camp
@@ -58,12 +61,17 @@ static ofstream fout("log_info.txt");
 void printUnit(vector<PUnit*> units);
 #endif
 
+// vector related
+template <typename T> void releaseVector(vector<T*> vct);
+template <typename T> void makePushBack(vector<T> vct, string str); // 专处理units storage
+
 // handling stored data
 template <typename T> void clearOldInfo(vector<T> vct);             // 及时清理陈旧储存信息
 int storedHero(PUnit* hero, int prev_n, string attr);               // prev_n轮之前的对应英雄attr属性值
-template <typename T> void makePushBack(vector<T> vct, string str); // 专处理units storage
+void clearExcessData();                                             // 清楚过剩数据
 
 // handling units
+void makeHero(PUnit* unit, Hero* hero_ptr);
 int vsResult(vector<PUnit*> a, vector<PUnit*> b);                   // -1: a胜; 0: 平; 1: b胜
 int vsResult(PUnit* a, PUnit* b);                                   // 重载
 
@@ -82,6 +90,7 @@ protected:
     void getUnits();
 
 public:
+    // store
     void storeEconomy();
     // run observer
     void observeGame();
@@ -103,8 +112,10 @@ struct Commander {
     string storeUnit(PUnit* unit);                  // 将单位信息存储成string,记录以便下回合使用
 
     // battle analysis
-
-
+    // todo
+    void analyzeGame();
+    void giveOrders();
+    void storeCmdInfo();
 
 };
 
@@ -135,8 +146,10 @@ private:
 protected:
     // helpers
     int holdRounds();                           // 按上一回合状态,尚可支撑的回合数
+    vector<PUnit*> near_enemy();                // 靠近的敌人
     vector<PUnit*> view_enemy();                // 视野内敌人
-    vector<PUnit*> view_friend();               // 视野内队友,todo 包含自己??
+    vector<PUnit*> near_friend();               // 靠近的队友,包含自己
+    vector<PUnit*> view_friend();               // 视野内队友,包含自己
     // judge
     void safetyEnv();                           // 判断安全现状
     void fightEnv();                            // 判断战斗势态
@@ -173,9 +186,30 @@ void player_ai(const PMap &map, const PPlayerInfo &info, PCommand &cmd) {
     Observer* observer = new Observer();
     observer->observeGame();
     observer->storeEconomy();
+    // 分析比赛局势
+    Commander* commander = new Commander();
+    commander->analyzeGame();
+    commander->giveOrders();
+    commander->storeCmdInfo();
+    // 英雄选择动作
+    // make hero list
+    vector<Hero*> heroes;
+    for (int i = 0; i < current_friends.size(); ++i) {
+        Hero* temp = nullptr;
+        makeHero(current_friends[i], temp);
+        heroes.push_back(temp);
+    }
+    // heroes do action and store info
+    for (int j = 0; j < heroes.size(); ++j) {
+        heroes[j]->selectAction();
+        heroes[j]->storeMe();
+    }
 
-
-
+    // clear vector and release pointers
+    clearExcessData();
+    releaseVector(heroes);
+    releaseVector(current_friends);
+    releaseVector(vi_enemies);
     delete observer;
     delete console;
 }
@@ -248,12 +282,28 @@ void printUnit(vector<PUnit *> units) {
 }
 #endif
 
+// vector related
+template <typename T>
+void releaseVector(vector<T*> vct) {
+    for (int i = 0; i < vct.size(); ++i) {
+        delete vct[i];
+    }
+    vct.clear();
+}
+
+template <typename T>
+void makePushBack(vector<T> vct, string str) {
+    /*
+     * 如果没有任何单位在本回合储存过,创建一个string并储存
+     * 如果有,弹出最后一个元素结尾,增长改写,再塞入
+     */
+
+}
+
 // handling stored data
 template <typename T>
 void clearOldInfo(vector<T> vct) {
-    const int CLEAN_NUMS = 10;
-    const int CLEAN_LIMIT = 20;
-    if (vct.size() > 20) {
+    if (vct.size() > CLEAN_LIMIT) {
         int check = 0;
         for (auto i = vct.begin(); i != vct.end(); i++) {
             check++;
@@ -268,7 +318,35 @@ int storedHero(PUnit* hero, int prev_n, string attr) {
     // todo
 }
 
+void clearExcessData() {
+    clearOldInfo(stored_money);
+    clearOldInfo(stored_enemy_money);
+    clearOldInfo(stored_friends);
+    clearOldInfo(stored_backup);
+}
 
+// handling units
+void makeHero(PUnit* unit, Hero* hero_ptr) {
+    hero_ptr = new Hero(unit);
+}
+
+int vsResult(vector<PUnit*> a, vector<PUnit*> b) {
+    /*
+     * 计算公式:
+     * 技能杀伤 = todo 分类讨论,力求准确
+     * 生命恢复 = todo
+     * 死亡回合 = (hp + 生命恢复 - 技能杀伤) / (对方攻击 - 我方防守 + 生命恢复)
+     */
+
+}
+
+int vsResult(PUnit* a, PUnit* b) {
+    vector<PUnit*> aa;
+    vector<PUnit*> bb;
+    aa.push_back(a);
+    bb.push_back(b);
+    vsResult(aa, bb);
+}
 
 /************************************************************
  * Implementation: class Observer
@@ -305,8 +383,6 @@ void Observer::observeGame() {
 }
 
 void Observer::storeEconomy() {
-    clearOldInfo(stored_money);
-    clearOldInfo(stored_enemy_money);
     stored_money.push_back(my_money);
     stored_enemy_money.push_back(enemy_money);
 }
@@ -341,7 +417,7 @@ void Hero::safetyEnv() {
         return;
     }
     // 2-5
-    int vs_result = vsResult(view_friend(), view_friend());
+    int vs_result = vsResult(near_friend(), near_enemy());  // 近距离队友与敌人的战况
     int hp = this_hero->hp;
     int max_hp = this_hero->max_hp;
     if (hp > ALERT * max_hp) {
@@ -382,6 +458,36 @@ Hero::Hero(PUnit *hero) {
     skill_state = last_hero.skill_state;
 }
 
+// public set state and env
+
+void Hero::setEnv(
+        int safety = -1,
+        int fight = -1
+) {
+    if (safety != -1) {
+        safety_env = safety;
+    }
+    if (fight != -1) {
+        fight_env = fight;
+    }
+}
+
+void Hero::setState(
+        int atk = -1,
+        int move = -1,
+        int skill = -1
+) {
+    if (atk != -1) {
+        atk_state = atk;
+    }
+    if (move != -1) {
+        move_state = move;
+    }
+    if (skill != -1) {
+        skill_state = skill;
+    }
+}
+
 // public store data
 void Hero::storeMe() {
     string my_info = "";
@@ -395,7 +501,12 @@ void Hero::storeMe() {
     my_info = my_info + "defend:" + this_hero->def + ",";
     my_info = my_info + "level:" + this_hero->level + ",";
     my_info = my_info + "maxhp:" + this_hero->max_hp + ",";
-    my_info = my_info + "maxmp:" + this_hero->max_mp + "},";
+    my_info = my_info + "maxmp:" + this_hero->max_mp + ",";
+    my_info = my_info + "safe_e:" + safety_env + ",";
+    my_info = my_info + "fight_e:" + fight_env + ",";
+    my_info = my_info + "atk_s:" + atk_state + ",";
+    my_info = my_info + "move_s:" + move_state + ",";
+    my_info = my_info + "skill_s:" + skill_state + "}";
     makePushBack(stored_friends, my_info);
 }
 
