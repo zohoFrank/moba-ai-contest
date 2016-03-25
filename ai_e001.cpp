@@ -2,7 +2,9 @@
 #include <fstream>
 #include <vector>
 #include <string>
+#include <cstdio>
 #include <iomanip>
+#include <sstream>
 
 using namespace std;
 
@@ -61,13 +63,16 @@ static ofstream fout("log_info.txt");
 void printUnit(vector<PUnit*> units);
 #endif
 
-// vector related
+// data structure related
 template <typename T> void releaseVector(vector<T*> vct);
 template <typename T> void makePushBack(vector<T> vct, string str); // 专处理units storage
+int str2int(string str);
+string int2str(int n);
+string getSubstr(string origin, string start_s, string end_s);      // 包含给定标记串的子串,子串包含stat_s,只包含end_s[第一个字符]
 
 // handling stored data
 template <typename T> void clearOldInfo(vector<T> vct);             // 及时清理陈旧储存信息
-int storedHero(PUnit* hero, int prev_n, string attr);               // prev_n轮之前的对应英雄attr属性值
+int storedHeroAttr(PUnit *hero, int prev_n, string attr);           // prev_n轮之前的对应英雄attr属性值
 void clearExcessData();                                             // 清楚过剩数据
 
 // handling units
@@ -141,7 +146,6 @@ private:
     int type, id;
     // environment
     int safety_env;
-    int fight_env;
     // state
     int atk_state;
     int move_state;
@@ -156,8 +160,8 @@ protected:
     vector<PUnit*> view_friend();               // 视野内队友,包含自己
     // judge
     void safetyEnv();                           // 判断安全现状
-    void fightEnv();                            // 判断战斗势态
     // actions
+    void stepBackward();                        // 远程单位被攻击后撤
     void callBackup();                          // 请求支援
     void fastFlee();                            // 快速逃窜
     void chaseAttack();                         // 追击
@@ -173,7 +177,7 @@ public:
     }
 
     // set state and env
-    void setEnv(int safety = -1, int fight = -1);
+    void setEnv(int safety = -1);
     void setState(int atk = -1, int move = -1, int skill = -1);     // 如果是-1,不改变当前值
     // decision maker
     void selectAction();                        // 考虑所有state的组合
@@ -286,7 +290,7 @@ void printUnit(vector<PUnit *> units) {
 }
 #endif
 
-// vector related
+// data structure related
 template <typename T>
 void releaseVector(vector<T*> vct) {
     for (int i = 0; i < vct.size(); ++i) {
@@ -301,7 +305,33 @@ void makePushBack(vector<T> vct, string str) {
      * 如果没有任何单位在本回合储存过,创建一个string并储存
      * 如果有,弹出最后一个元素结尾,增长改写,再塞入
      */
+    // todo
+}
 
+int str2int(string str) {
+    stringstream buff;
+    buff.clear();
+    int number;
+    buff << str;
+    buff >> number;
+    return number;
+}
+
+string int2str(int n) {
+    stringstream int2str;
+    string str;
+    int2str.clear();
+    int2str << n;
+    int2str >> str;
+    return str;
+}
+
+string getSubstr(string origin, string start_s, string end_s) {
+    unsigned long start = origin.find(start_s);
+    unsigned long end = origin.find(end_s);
+    unsigned long len = end - start + 1;
+    string substr = origin.substr(start, len);
+    return substr;
 }
 
 // handling stored data
@@ -317,9 +347,18 @@ void clearOldInfo(vector<T> vct) {
     }
 }
 
-int storedHero(PUnit* hero, int prev_n, string attr) {
-    string json_str = "";
-    // todo
+int storedHeroAttr(PUnit *hero, int prev_n, string attr) {
+    // todo need code review
+    string str = stored_friends[stored_friends.size() - 1 - prev_n];
+    // identification
+    string confirm = "{type:" + hero->typeId;
+    confirm = confirm + ",id:" + hero->id;
+    string hero_str = getSubstr(str, confirm, "}");     // 捕捉英雄字符串
+    string attr_str = getSubstr(hero_str, attr, ",");   // 搜寻属性串
+    string n_str =  getSubstr(attr_str, ":", ",");      // 读属性
+    string n = n_str.substr(1, n_str.length() - 2);     // robust?
+    int value = str2int(n);
+    return value;
 }
 
 void clearExcessData() {
@@ -328,6 +367,7 @@ void clearExcessData() {
     clearOldInfo(stored_friends);
     clearOldInfo(stored_backup);
 }
+
 
 // handling units
 void makeHero(PUnit* unit, Hero* hero_ptr) {
@@ -402,6 +442,7 @@ void Observer::storeEconomy() {
  ************************************************************/
 // protected helper
 
+
 // protected judge
 void Hero::safetyEnv() {
     // safe_env: safe, dangerous, dying
@@ -461,24 +502,19 @@ Hero::Hero(PUnit *hero) {
     type = this_hero->typeId;
     id = this_hero->id;
     // 延续上一回合决策
-    safety_env = storedHero(this_hero, 1, "safe_e");
-    fight_env = storedHero(this_hero, 1, "fight_e");
-    atk_state = storedHero(this_hero, 1, "atk_s");
-    move_state = storedHero(this_hero, 1, "move_s");
-    skill_state = storedHero(this_hero, 1, "skill_s");
+    safety_env = storedHeroAttr(this_hero, 1, "safe_e");
+    atk_state = storedHeroAttr(this_hero, 1, "atk_s");
+    move_state = storedHeroAttr(this_hero, 1, "move_s");
+    skill_state = storedHeroAttr(this_hero, 1, "skill_s");
 }
 
 // public set state and env
 
 void Hero::setEnv(
-        int safety = -1,
-        int fight = -1
+        int safety = -1
 ) {
     if (safety != -1) {
         safety_env = safety;
-    }
-    if (fight != -1) {
-        fight_env = fight;
     }
 }
 
@@ -502,21 +538,15 @@ void Hero::setState(
 void Hero::storeMe() {
     string my_info = "";
     // store the data as JSON style
-    my_info = my_info + "{camp:" + this_hero->camp + ",";
-    my_info = my_info + "type:" + type + ",";
-    my_info = my_info + "id:" + id + ",";
-    my_info = my_info + "hp:" + this_hero->hp + ",";
-    my_info = my_info + "mp:" + this_hero->mp + ",";
-    my_info = my_info + "attack:" + this_hero->atk + ",";
-    my_info = my_info + "defend:" + this_hero->def + ",";
-    my_info = my_info + "level:" + this_hero->level + ",";
-    my_info = my_info + "maxhp:" + this_hero->max_hp + ",";
-    my_info = my_info + "maxmp:" + this_hero->max_mp + ",";
-    my_info = my_info + "safe_e:" + safety_env + ",";
-    my_info = my_info + "fight_e:" + fight_env + ",";
-    my_info = my_info + "atk_s:" + atk_state + ",";
-    my_info = my_info + "move_s:" + move_state + ",";
-    my_info = my_info + "skill_s:" + skill_state + "}";
+    my_info = my_info + "{type:" + int2str(type) + ",";
+    my_info = my_info + "id:" + int2str(id) + ",";
+    my_info = my_info + "hp:" + int2str(this_hero->hp) + ",";
+    my_info = my_info + "mp:" + int2str(this_hero->mp) + ",";
+    my_info = my_info + "level:" + int2str(this_hero->level) + ",";
+    my_info = my_info + "safe_e:" + int2str(safety_env) + ",";
+    my_info = my_info + "atk_s:" + int2str(atk_state) + ",";
+    my_info = my_info + "move_s:" + int2str(move_state) + ",";
+    my_info = my_info + "skill_s:" + int2str(skill_state) + ",}";
     makePushBack(stored_friends, my_info);
 }
 
