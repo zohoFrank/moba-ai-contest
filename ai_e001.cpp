@@ -83,6 +83,8 @@ static vector<int> stored_money;                    //
 static vector<string> stored_friends;               // 以heroes为原型
 static vector<int> stored_tactic;                   // 储存的战术
 static vector<string> stored_mine_situation;        // 储存的各矿点战况
+// test
+static vector<vector<PUnit>> str_units;
 
 /*################# Assistant functions ####################*/
 #ifdef LOG
@@ -712,6 +714,11 @@ void Observer::observeGame() {
 
 void Observer::storeObserverInfo() {
     stored_money.push_back(my_money);
+    vector<PUnit> friends;
+    for (int i = 0; i < current_friends.size(); ++i) {
+        friends.push_back(*current_friends[i]);
+    }
+    str_units.push_back(friends);
 #ifdef LOG
     logger << "... Store the money" << endl;
 #endif
@@ -1584,9 +1591,19 @@ void Hero::contactAttack() {                // toedit 主要策略点
 }
 
 // public constructor
-Hero::Hero(PUnit *hero) { setPtr(hero); }
+Hero::Hero(PUnit *hero) {
+#ifdef LOG
+    int test = 0;
+    if (Round > 3) {
+        test = str_units.back()[0].hp;
+    }
+    logger << "!!!!NEW STORE METHOD: hp = " << test << endl;
+#endif
+    setPtr(hero);
+}
 
 void Hero::setPtr(PUnit *unit) {
+
     if (unit == nullptr) return;
 
     this_hero = unit;
