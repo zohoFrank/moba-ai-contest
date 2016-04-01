@@ -122,6 +122,7 @@ void printString(vector<T> vct);      // T重载了<<
 // =============== Basic Algorithms ================
 // Path finding
 Pos changePos(const Pos &origin, const Pos &reference, double len, bool away = true);  // 详见实现
+Pos nearestKeyPointsDis(Pos pos);                        // 最近的关键点编号,包括各个矿和自定义的关键点
 
 // String and int transfer
 int str2int(string str);
@@ -153,7 +154,7 @@ bool justBeAttacked(PUnit *test);
 vector<PUnit *> range_units(int range, int camp, vector<string> avoids);    // 范围内的单位过滤器
 int surviveRounds(PUnit *host, PUnit *guest);       // 计算存活轮数,如果host强,返回guest存活,负整数;否则,返回host存活,正整数
 PUnit* findID(vector<PUnit*> units, int _id);
-
+int teamAtk(vector<PUnit *> vct);
 
 /************************************************************
  * Global commander
@@ -234,7 +235,6 @@ public:
     int speed, view, range;
     Pos pos;
 
-    bool contact;                               // 主动攻击
     int target;                                 // 战术编号
     int hot_id;                                 // 便于储存
 
@@ -248,13 +248,13 @@ public:
 
     // setter
     Hero getStoredHero(int prev_n);             // 获得之前prev_n局的储存对象
-    void judgeContact();                        // 判断是否交战
     Pos callBackup();                           // 请求援助
     void lockHotUnit();                         // 锁定攻击目标
     void checkHotUnit();                        // 再次确认攻击目标
 
     /*************************Helpers***************************/
     vector<PUnit*> whoHitMe();                  // 返回攻击自己的单位
+    bool timeToFlee();                          // 该
 
     /**************************Actions**************************/
     // move,基本不调用其他动作接口,也不进行条件判断
@@ -264,10 +264,10 @@ public:
     void justMove();                            // 前往目标
 
     // attack,根据条件判断,调用move接口
-    bool hammerguardAttack();                   //
-    bool berserkerAttack();                     //
-    bool masterAttack();                        //
-    bool scouterAttack();                       //
+    void hammerguardAttack();                   //
+    void berserkerAttack();                     //
+    void masterAttack();                        //
+    void scouterAttack();                       //
 
     // 调用attack类接口
     void contactAttack();                       // 全力攻击,调用移动接口
@@ -379,7 +379,6 @@ void printHeroList(vector<Hero> units) {
     logger << left << setw(5) << "ATK";
     logger << left << setw(5) << "DEF";
     logger << left << setw(10) << "POS";
-    logger << left << setw(5) << "CON";
     logger << left << setw(5) << "TAC";
     logger << left << setw(10) << "BUFF";
     logger << endl;
@@ -394,11 +393,8 @@ void printHeroList(vector<Hero> units) {
         logger << left << setw(5) << unit.mp;
         logger << left << setw(5) << unit.atk;
         logger << left << setw(5) << unit.def;
-        // POS
-        string pos = int2str(unit.pos.x) + "," + int2str(unit.pos.y);
-        logger << left << setw(10) << pos;
-        // CON/TAC
-        logger << left << setw(5) << units[i].contact;
+        // POS/TAC
+        logger << left << setw(10) << unit.pos;
         logger << left << setw(5) << units[i].target;
         // BUFF
         vector<PBuff> buff = unit.punit->buffs;
@@ -578,6 +574,16 @@ bool justBeAttacked(PUnit *test) {
     else
         return false;
 }
+
+
+int teamAtk(vector<PUnit *> vct) {
+    int round_atk = 0;
+    for (int i = 0; i < vct.size(); ++i) {
+        round_atk += vct[i]->atk;
+    }
+    return round_atk;
+}
+
 
 
 /************************************************************
@@ -834,22 +840,6 @@ PUnit *Hero::nearestEnemy() const {
 }
 
 
-void Hero::judgeContact() {
-    Hero last_r = getStoredHero(1);
-    if (last_r == NULL) {
-        contact = 1;
-        return;
-    }
-
-    // 默认继承,由于后续函数,可能是1,也可能是0
-    contact = last_r.contact;
-    // 刚被攻击立即变为1
-    if (justBeAttacked(punit)) {
-        contact = 1;
-    }
-}
-
-
 Hero Hero::getStoredHero(int prev_n) {
     if (prev_n >= str_heroes.size())
         return NULL;
@@ -955,6 +945,19 @@ vector<PUnit *> Hero::whoHitMe() {
 }
 
 
+bool Hero::timeToFlee() {
+    if (hp < HP_ALERT * punit->max_hp) {
+        return true;
+    } else {
+        vector<PUnit *> hitters = whoHitMe();
+        if (teamAtk(hitters) > hp)
+            return true;
+    }
+
+    return false;
+}
+
+
 /**************************Actions**************************/
 
 void Hero::cdWalk() {
@@ -968,7 +971,13 @@ void Hero::cdWalk() {
 void Hero::fastFlee() {
     Pos ref = nearestEnemy()->pos;
     // 撤离距离为尽量远离任何最近的单位
-    Pos far_p = changePos(pos, ref, speed, true);
+    if (type == 4 && punit->canUseSkill("Blink")) {     // master的闪烁
+        Pos far_p = changePos(pos, ref, BLINK_RANGE, true);
+        console->useSkill("Blink", far_p, punit);       // go
+    } else {
+        Pos far_p = changePos(pos, ref, speed, true);
+        console->move(far_p, punit);                    // go
+    }
 }
 
 
@@ -998,8 +1007,69 @@ void Hero::stepBackwards() {
 
 
 void Hero::justMove() {
+    if (type == 6 && punit->canUseSkill("SetObserver")) {
+        // 如果离关键点比较近,那么插眼
+        Pos nearest_key = nearestKeyPointsDis(pos);
+        if (dis(nearest_key, pos) < SET_OBSERVER_RANGE) {
+            console->useSkill("SetObserver", nearest_key, punit);   // go
+            return;
+        }
+    }
+
     console->move(TACTIC_LIB[target].path, punit);      // go
 }
+
+
+void Hero::hammerguardAttack() {
+    // 要逃走
+    if (timeToFlee()) {
+        fastFlee();
+        return;
+    }
+
+    // 无攻击目标
+    if (hot == nullptr) {
+        justMove();
+        return;
+    }
+
+    // cd中
+    if (!punit->canUseSkill("HammerAttack") && !punit->canUseSkill("Attack")) {
+        cdWalk();
+        return;
+    }
+
+    // 可以攻击
+    if (punit->canUseSkill("HammerAttack")) {
+        console->useSkill("HammerAttack", hot, punit);  // go
+    } else {
+        if (punit->canUseSkill("Attack")) {
+            console->attack(hot, punit);                // go
+        }
+    }
+}
+
+
+
+void Hero::contactAttack() {
+    switch (type) {
+        case 3:
+            hammerguardAttack();
+            break;
+        case 4:
+            masterAttack();
+            break;
+        case 5:
+            berserkerAttack();
+            break;
+        case 6:
+            scouterAttack();
+            break;
+        default:
+            break;
+    }
+}
+
 
 
 /***********************************************************/
@@ -1112,22 +1182,7 @@ void Hero::Act() {
     if (hot == nullptr || contact == 0) {
         justMove();
     } else if (contact == 1) {
-        switch (type) {
-            case 3:
-                hammerguardAttack();
-                break;
-            case 4:
-                masterAttack();
-                break;
-            case 5:
-                berserkerAttack();
-                break;
-            case 6:
-                scouterAttack();
-                break;
-            default:
-                break;
-        }
+        contactAttack();
     }
 }
 
