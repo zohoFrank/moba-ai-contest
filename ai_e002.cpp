@@ -240,7 +240,7 @@ public:
 
     PUnit *hot;
     // shared units vectors
-    vector<PUnit *> view_enemy;                 // 视野范围内的敌人
+    vector<PUnit *> my_view_en;                 // 视野范围内的敌人
 
     /*************************Setters**************************/
     PUnit *nearestEnemy(vector<PUnit *> &ignore) const;         // 视野范围内最近的敌人
@@ -257,19 +257,19 @@ public:
     bool timeToFlee();                          // 该
 
     /**************************Actions**************************/
-    // move,基本不调用其他动作接口,也不进行条件判断
+    // 仅move
     void cdWalk();                              // cd间的躲避步伐
     void fastFlee();                            // 快速逃窜步伐
     void stepBackwards();                       // 远程单位被攻击后撤
     void justMove();                            // 前往目标
 
-    // attack,根据条件判断,调用move接口
+    // 仅attack
     void hammerguardAttack();                   //
     void berserkerAttack();                     //
     void masterAttack();                        //
     void scouterAttack();                       //
 
-    // 调用attack类接口
+    // 条件判断,并调用以上move和attack接口
     void contactAttack();                       // 全力攻击,调用移动接口
 
     /**********************************************************/
@@ -815,14 +815,14 @@ PUnit *Hero::nearestEnemy(vector<PUnit *> &ignore) const {
      * 除矿以外一切可攻击单位,可以在ignore中指定被忽略的对象
      */
     // 可攻击对象不存在
-    if (view_enemy.size() == 0)
+    if (my_view_en.size() == 0)
         return nullptr;
 
     double min_dist = MAP_SIZE * 1.0;
     PUnit *selected = nullptr;
 
-    for (int i = 0; i < view_enemy.size(); ++i) {
-        PUnit *it = view_enemy[i];
+    for (int i = 0; i < my_view_en.size(); ++i) {
+        PUnit *it = my_view_en[i];
         double dist = dis(it->pos, pos);
         if (dist < min_dist && !contain(ignore, it)) {
             selected = it;
@@ -875,8 +875,8 @@ void Hero::lockHotUnit() {      // toedit 主要策略点
      * 追击了一段时间即停止
      */
     // 特殊buff
-    for (int i = 0; i < view_enemy.size(); ++i) {
-        PUnit *en = view_enemy[i];
+    for (int i = 0; i < my_view_en.size(); ++i) {
+        PUnit *en = my_view_en[i];
         // WinOrDie
         if (hasBuff(en, "WinOrDie")) {
             hot = en;
@@ -892,7 +892,7 @@ void Hero::lockHotUnit() {      // toedit 主要策略点
     // 继承
     Hero last = getStoredHero(1);
     if (last != NULL) {
-        PUnit *same_enemy = findID(view_enemy, last.hot_id);
+        PUnit *same_enemy = findID(my_view_en, last.hot_id);
         if (same_enemy != nullptr && same_enemy->hp > 0) {      // 避免不存在/死亡/召回
             hot = same_enemy;
             return;
@@ -904,8 +904,8 @@ void Hero::lockHotUnit() {      // toedit 主要策略点
     int max_sr = 0;         // 最多存活轮数
     int index = -1;
     bool has_beater = false;// 有人可打
-    for (int j = 0; j < view_enemy.size(); ++j) {
-        PUnit* enemy = view_enemy[j];
+    for (int j = 0; j < my_view_en.size(); ++j) {
+        PUnit* enemy = my_view_en[j];
         int sr_r = surviveRounds(punit, enemy);
         if (sr_r < 0) {     // host强
             sr_r = -sr_r;
@@ -921,7 +921,7 @@ void Hero::lockHotUnit() {      // toedit 主要策略点
             }
         }
     }
-    hot = view_enemy[index];
+    hot = my_view_en[index];
 }
 
 
@@ -969,6 +969,10 @@ void Hero::cdWalk() {
 
 
 void Hero::fastFlee() {
+    // 忽略Sacrifice技能
+    if (hasBuff(punit, "WinOrDie"))
+        return;
+
     Pos ref = nearestEnemy()->pos;
     // 撤离距离为尽量远离任何最近的单位
     if (type == 4 && punit->canUseSkill("Blink")) {     // master的闪烁
@@ -1021,6 +1025,74 @@ void Hero::justMove() {
 
 
 void Hero::hammerguardAttack() {
+    // cd中
+    if (!punit->canUseSkill("HammerAttack") && !punit->canUseSkill("Attack")) {
+        cdWalk();
+        return;
+    }
+
+    // 攻击
+    if (punit->canUseSkill("HammerAttack")) {
+        console->useSkill("HammerAttack", hot, punit);  // go
+    } else {
+        console->attack(hot, punit);                    // go
+    }
+}
+
+
+void Hero::berserkerAttack() {
+    /*
+     * 使用Sacrifice的条件:
+     * 1.没有AttackCd
+     * 2.遍历所有敌人,应该不存在:其射程既能包含我,又没有AttackCd
+     */
+    // cd中
+    if (!punit->canUseSkill("Attack")) {
+        cdWalk();
+        return;
+    }
+
+    bool safe_env = true;
+    for (int i = 0; i < my_view_en.size(); ++i) {
+        PUnit *en = my_view_en[i];
+        double dist = dis(pos, en->pos);
+        if (en->range >= dist) {
+            safe_env = false;
+            break;
+        }
+    }
+    // 结算
+    if (punit->canUseSkill("Attack") && safe_env) {
+        console->useSkill("Sacrifice", hot, punit);     // go
+    } else {
+        console->attack(hot, punit);                    // go
+    }
+}
+
+
+void Hero::masterAttack() {
+    /*
+     * blink追击的条件: (master普通攻击没有cd)
+     * 1.与该单位的距离(range, range + blink_range]
+     * 2.该单位一击便歹
+     */
+    double dist = dis(hot->pos, pos);
+    if (dist > range && dist <= range + BLINK_RANGE && hot->hp < atk) {
+        Pos chase_p = changePos(pos, hot->pos, dist - range / 2, false);
+        console->useSkill("Blink", chase_p, punit);     // go
+    } else {
+        console->attack(hot, punit);                    // go
+    }
+}
+
+
+void Hero::scouterAttack() {
+    // 没有cd
+    console->attack(hot, punit);        // go
+}
+
+
+void Hero::contactAttack() {
     // 要逃走
     if (timeToFlee()) {
         fastFlee();
@@ -1033,25 +1105,7 @@ void Hero::hammerguardAttack() {
         return;
     }
 
-    // cd中
-    if (!punit->canUseSkill("HammerAttack") && !punit->canUseSkill("Attack")) {
-        cdWalk();
-        return;
-    }
-
-    // 可以攻击
-    if (punit->canUseSkill("HammerAttack")) {
-        console->useSkill("HammerAttack", hot, punit);  // go
-    } else {
-        if (punit->canUseSkill("Attack")) {
-            console->attack(hot, punit);                // go
-        }
-    }
-}
-
-
-
-void Hero::contactAttack() {
+    // attack
     switch (type) {
         case 3:
             hammerguardAttack();
@@ -1128,7 +1182,7 @@ void Hero::setUnits() {
     filter.setAreaFilter(new Circle(punit->pos, punit->view), "a");
     filter.setCampFilter(enemyCamp());
     filter.setAvoidFilter("Observer", "a");
-    view_enemy = console->enemyUnits(filter);
+    my_view_en = console->enemyUnits(filter);
 }
 
 
@@ -1159,12 +1213,12 @@ Hero::Hero(const Hero &hero) {
     contact = hero.contact;
     target = hero.target;
     hot = nullptr;
-    view_enemy.clear();
+    my_view_en.clear();
 }
 
 
 Hero::~Hero() {
-    view_enemy.clear();
+    my_view_en.clear();
     punit = nullptr;
     hot = nullptr;
 }
@@ -1191,8 +1245,8 @@ void Hero::Act() {
 
 /*
  * 1.近距离协助机制
- * 2.cdWalk()
- * 3.重写contactAttack()
+// * 2.cdWalk()
+// * 3.重写contactAttack()
  * 4.分配任务采取直接指定制,(过n回合全局分析一下效果,再调整战术——暂时不写)
  *                      或者,按英雄能力阶段分配战术,能力满足要求时组队打野
  * 5.
