@@ -1,3 +1,6 @@
+// 调试开关
+#define LOG
+
 #include "console.h"
 #include <fstream>
 #include <vector>
@@ -6,13 +9,19 @@
 #include <iomanip>
 #include <sstream>
 
+#ifdef LOG
+
+#include "Pos.h"
+#include "const.h"
+
+#endif
+
 using namespace std;
 
-// 调试开关
-#define LOG
-
 typedef pair<int, Tactic> TRecord;
+
 class Hero;
+
 struct Commander;
 struct Tactic;
 /*######################## DATA ###########################*/
@@ -28,12 +37,19 @@ static const int HERO_COST[] = {
         NEW_HAMMERGUARD_COST, NEW_MASTER_COST, NEW_BERSERKER_COST, NEW_SCOUTER_COST,
         NEW_MASTER_COST, NEW_HAMMERGUARD_COST, NEW_BERSERKER_COST, NEW_SCOUTER_COST
 };
+static const int ATK_CD[] = {
+        MILITARY_BASE_ATTACK_MAXCD, 0, 0, HAMMERGUARD_ATTACK_MAXCD, MASTER_ATTACK_MAXCD,
+        BERSERKER_ATTACK_MAXCD, SCOUTER_ATTACK_MAXCD
+};
+
+static vector<Tactic> TACTIC_LIB;
+static void makeTacicLib();
 
 /************************************************************
  * Policy const values
  ************************************************************/
 // Commander
-static const int TACTICS = 0;               // 默认开局战术代号
+static const int OPENING_TACTIC = 0;        // 默认开局战术代号
 // Commander::levelUp
 static const double LEVEL_UP_COST = 0.5;    // 升级金钱比例
 // Commander::buyNewHero
@@ -51,10 +67,10 @@ static const int CLEAN_NUMS = 2;            // 超过最多保留记录后,一�
 
 // Hero
 // Hero::judgeState()
-static const double ALERT = 0.25;           // 血量预警百分比
-static const int HOLD = 3;                  // 坚守回合数预警
+static const double HP_ALERT = 0.1;           // 血量预警百分比
 // Hero::near_u
-static const int BACKUP_RANGE = 200;        // 支援范围常数
+static const double BACKUP_RANGE = 300;         // 支援范围常数
+static const double ALERT_RANGE = 80;          // 警戒距离
 // Hero::stepBackwards()
 static const int MASTER_PATIENCE = 10;      // master允许单位进入射程的范围
 
@@ -68,8 +84,19 @@ static int CAMP = -1;                       // which camp
 static Console *console = nullptr;
 static Commander *commander = nullptr;
 static int Round = 0;
+int Economy;                                    // 经济
+
+vector<int> tactic;                             // 设置战术代号
+
+vector<PUnit *> cur_friends;                    // 当前友军英雄
+const PUnit *base;                              // 我的基地
+vector<PUnit *> vi_enemies;                     // 当前可见敌人英雄,不含野怪
+const PUnit *en_base;                           // 敌人基地
+vector<PUnit *> vi_mines;                       // 可见矿(矿的位置是默认的,但状态需要可见才能读取)
+vector<PUnit *> vi_monsters;                    // 可见野怪
 
 // 7个矿顺序依次是 0-中矿,1-8点,2-10点,3-4点,4-2点,5-西北,6-东南
+
 
 /************************************************************
  * Storage data
@@ -83,9 +110,13 @@ static vector<vector<Hero>> str_heroes;         // 储存的英雄
 // ================ Log Related ====================
 #ifdef LOG
 static ofstream logger("log_info.txt");
+
 void printUnit(vector<PUnit *> units);
+
 void printHeroList(vector<Hero> units);
-template<typename T> void printString(vector<T> vct);      // T重载了<<
+
+template<typename T>
+void printString(vector<T> vct);      // T重载了<<
 #endif
 
 // =============== Basic Algorithms ================
@@ -94,13 +125,23 @@ Pos changePos(const Pos &origin, const Pos &reference, double len, bool away = t
 
 // String and int transfer
 int str2int(string str);
+
 string int2str(int n);
 
 // Data structure related
-template<typename T> void releaseVector(vector<T *> vct);
+template<typename T>
+void releaseVector(vector<T *> vct);
+
+template<typename T>
+bool contain(vector<T> vct, const T &elem);
+
+bool operator==(const PUnit *a, const PUnit *b);
+
+bool operator==(const Hero &a, const Hero &b);
 
 // Handling stored data
-template<typename T> void clearOldInfo(vector<T> &vct);                              // 及时清理陈旧储存信息
+template<typename T>
+void clearOldInfo(vector<T> &vct);                              // 及时清理陈旧储存信息
 
 
 // ============== Game and Units ===================
@@ -108,7 +149,11 @@ int enemyCamp();                                                    // 敌人的
 
 // Unit
 bool hasBuff(PUnit *unit, const char *buff);                        // 是否有某buff
+bool justBeAttacked(PUnit *test);
 vector<PUnit *> range_units(int range, int camp, vector<string> avoids);    // 范围内的单位过滤器
+int surviveRounds(PUnit *host, PUnit *guest);       // 计算存活轮数,如果host强,返回guest存活,负整数;否则,返回host存活,正整数
+PUnit* findID(vector<PUnit*> units, int _id);
+
 
 /************************************************************
  * Global commander
@@ -117,24 +162,13 @@ vector<PUnit *> range_units(int range, int camp, vector<string> avoids);    // �
 // 更新不同战区信息,units可以领任务,然后形成team
 // global_state: inferior, equal, superior
 struct Commander {
-    int Economy;
-
-    vector<int> tactic;                             // 设置战术代号
-
-    vector<PUnit *> cur_friends;
-    const PUnit *base;
-
-    vector<PUnit *> vi_enemies;
-    const PUnit *en_base;                           // 敌人基地
-
-    vector<PUnit *> vi_mines;
-    vector<PUnit *> vi_monsters;
-
     vector<Hero> heroes;
+    vector<Pos> backups;                            // 求援的地点汇总
 
     /**********************************************************/
     // constructor
     Commander();
+
     ~Commander();
 
     // HELP CONSTRUCTOR
@@ -168,13 +202,16 @@ struct Commander {
 // 一个战术包括地点/单位/行进路径
 struct Tactic {
     int id;
+    int type;           // 0-mine, 1-attack
     Pos target;
     vector<Pos> path;
 
-    // constructor
-    Tactic(int id, const Pos &target, const vector<Pos> &path) : id(id), target(target), path(path) { }
+    // constructor 默认采中间矿
+    Tactic(int id, int type, const Pos &target, const vector<Pos> &path) :
+            id(id), type(type), target(target), path(path) { }
 
-    Tactic(int id, const Pos &target) : id(id), target(target) { }
+    Tactic(int id = 0, int type = 0, const Pos &target = MINE_POS[0]) :
+            id(id), type(type), target(target) { }
 
     // attribute
     bool hasPath();
@@ -183,50 +220,54 @@ struct Tactic {
 /************************************************************
  * Heroes
  ************************************************************/
-// 实际上是一个友方英雄类,敌方英雄暂无必要考虑
+// 重新封装PUnit数据,便于数据储存
 // 由于单位种类太少,技能也很少,所以暂不计划采用继承的方式
-// state: 0-safe, 1-dangerous, 2-dying
-// contact: 0-no, 1-yes
 class Hero {
 public:
-    PUnit hero_ptr;
-
+    PUnit *punit;
+    /*************************Info**************************/
+    string name;
     int type, id;
+    int hp, mp;
+    int exp, level;
+    int atk, def;
+    int speed, view, range;
+    Pos pos;
 
-    int state;
-    int contact;
-    bool attackCd;
-    bool skillCd;
+    bool contact;                               // 主动攻击
+    int target;                                 // 战术编号
+    int hot_id;                                 // 便于储存
 
-    // tactic
     PUnit *hot;
-    Tactic target;
-
     // shared units vectors
-    vector<PUnit *> range_en;                    // 射程范围内的敌人
-    vector<PUnit *> near_u;                      // 支援范围内的单位
+    vector<PUnit *> view_enemy;                 // 视野范围内的敌人
 
     /*************************Setters**************************/
-    PUnit *nearestEnemy();                      // 最近的敌人
+    PUnit *nearestEnemy(vector<PUnit *> &ignore) const;         // 视野范围内最近的敌人
+    PUnit *nearestEnemy() const;
 
     // setter
+    Hero getStoredHero(int prev_n);             // 获得之前prev_n局的储存对象
     void judgeContact();                        // 判断是否交战
-    void judgeState();                          // 判断安全现状
-    void lockHotTarget();                       // 锁定攻击目标
-    void callBackup();                          // 请求援助
+    Pos callBackup();                           // 请求援助
+    void lockHotUnit();                         // 锁定攻击目标
+    void checkHotUnit();                        // 再次确认攻击目标
+
+    /*************************Helpers***************************/
+    vector<PUnit*> whoHitMe();                  // 返回攻击自己的单位
 
     /**************************Actions**************************/
-    // move,基本不调用其他动作接口
+    // move,基本不调用其他动作接口,也不进行条件判断
     void cdWalk();                              // cd间的躲避步伐
+    void fastFlee();                            // 快速逃窜步伐
     void stepBackwards();                       // 远程单位被攻击后撤
-    void fastFlee();                            // 快速逃窜
-    void doTask();                              // 前往目标
+    void justMove();                            // 前往目标
 
-    // attack,调用move接口
-    bool hammerguardAttack();                   // 重锤技能判断并释放
-    bool berserkerAttack();                     // 孤注一掷技能判断并释放
-    bool masterAttack();                        // 闪烁技能判断并释放
-    bool scouterAttack();                       // 插眼技能判断并释放
+    // attack,根据条件判断,调用move接口
+    bool hammerguardAttack();                   //
+    bool berserkerAttack();                     //
+    bool masterAttack();                        //
+    bool scouterAttack();                       //
 
     // 调用attack类接口
     void contactAttack();                       // 全力攻击,调用移动接口
@@ -234,15 +275,16 @@ public:
     /**********************************************************/
     // constructor/destructor
     void setPtr(PUnit *unit);                   // 连接ptr
-    void setUnits();                            // 设置常用的单位向量
+    void setUnits();                            // 设置成员变量
 
     Hero(PUnit *hero = nullptr);
     ~Hero();
-
-    // 储存
-    void storeMe();
+    Hero(const Hero &hero);
 
     /*************************Loader***************************/
+    // Commander接口
+    void setTarget(int tac_n);                  // 设置战术
+
     // LOADER
     void Act();         // 调用一切接口
 };
@@ -307,10 +349,10 @@ void printUnit(vector<PUnit *> units) {
         logger << left << setw(5) << unit->mp;
         logger << left << setw(5) << unit->atk;
         logger << left << setw(5) << unit->def;
-        // print pos
+        // POS
         string pos = int2str(unit->pos.x) + "," + int2str(unit->pos.y);
         logger << left << setw(10) << pos;
-        // print buff
+        // BUFF
         vector<PBuff> buff = unit->buffs;
         for (int j = 0; j < buff.size(); ++j) {
             string buff_name = buff[j].name;
@@ -321,6 +363,7 @@ void printUnit(vector<PUnit *> units) {
         logger << endl;
     }
 }
+
 
 void printHeroList(vector<Hero> units) {
     if (units.empty()) {
@@ -336,32 +379,29 @@ void printHeroList(vector<Hero> units) {
     logger << left << setw(5) << "ATK";
     logger << left << setw(5) << "DEF";
     logger << left << setw(10) << "POS";
-    logger << left << setw(5) << "SAFE";
     logger << left << setw(5) << "CON";
-    logger << left << setw(5) << "CD";
+    logger << left << setw(5) << "TAC";
     logger << left << setw(10) << "BUFF";
     logger << endl;
     // print content
     for (int i = 0; i < units.size(); ++i) {
-        PUnit *unit = &units[i].hero_ptr;
+        Hero unit = units[i];
         // print basic hero info
-        logger << left << setw(14) << unit->name;
-        logger << left << setw(5) << unit->id;
-        logger << left << setw(8) << unit->level;
-        logger << left << setw(5) << unit->hp;
-        logger << left << setw(5) << unit->mp;
-        logger << left << setw(5) << unit->atk;
-        logger << left << setw(5) << unit->def;
-        // print pos
-        string pos = int2str(unit->pos.x) + "," + int2str(unit->pos.y);
+        logger << left << setw(14) << unit.name;
+        logger << left << setw(5) << unit.id;
+        logger << left << setw(8) << unit.level;
+        logger << left << setw(5) << unit.hp;
+        logger << left << setw(5) << unit.mp;
+        logger << left << setw(5) << unit.atk;
+        logger << left << setw(5) << unit.def;
+        // POS
+        string pos = int2str(unit.pos.x) + "," + int2str(unit.pos.y);
         logger << left << setw(10) << pos;
-        // SAFE/CON/TACT/CD
-        logger << left << setw(5) << units[i].state;
+        // CON/TAC
         logger << left << setw(5) << units[i].contact;
-        string cd = int2str(units[i].skillCd) + " " + int2str(units[i].attackCd);
-        logger << left << setw(5) << cd;
-        // print buff
-        vector<PBuff> buff = unit->buffs;
+        logger << left << setw(5) << units[i].target;
+        // BUFF
+        vector<PBuff> buff = unit.punit->buffs;
         for (int j = 0; j < buff.size(); ++j) {
             string buff_name = buff[j].name;
             string buff_str = buff_name + "(" + int2str(buff[j].timeLeft) + ")";
@@ -372,6 +412,7 @@ void printHeroList(vector<Hero> units) {
     }
 
 }
+
 
 template<typename T>
 void printString(vector<T> vct) {
@@ -410,13 +451,41 @@ Pos changePos(
     return target;
 }
 
+
 // about game
 int enemyCamp() {
     if (CAMP == 0) return 1;
     else return 0;
 }
 
+
 // data structure related
+template<typename T>
+bool contain(vector<T> vct, const T &elem) {
+//    return binary_search(vct.begin(), vct.end(), elem); 英雄太少没必要
+    for (int i = 0; i < vct.size(); ++i) {
+        if (vct[i] == elem) {
+            return true;
+        }
+    }
+    return false;
+}
+
+
+bool operator== (const PUnit *a, const PUnit *b) {
+    if (
+            a->typeId == b->typeId &&
+            a->id == b->id &&
+            a->exp == b->exp &&
+            a->hp == b->hp &&
+            a->mp == b->mp
+            )                       // fixme 没有round的笨方法
+        return true;
+    else
+        return false;
+}
+
+
 template<typename T>
 void releaseVector(vector<T *> vct) {
     for (int i = 0; i < vct.size(); ++i) {
@@ -429,6 +498,7 @@ void releaseVector(vector<T *> vct) {
     vct.clear();
 }
 
+
 int str2int(string str) {
     stringstream buff;
     buff.clear();
@@ -438,6 +508,7 @@ int str2int(string str) {
     return number;
 }
 
+
 string int2str(int n) {
     stringstream int2str;
     string str;
@@ -446,6 +517,7 @@ string int2str(int n) {
     int2str >> str;
     return str;
 }
+
 
 // handling stored data
 template<typename T>
@@ -465,7 +537,6 @@ void clearOldInfo(vector<T> &vct) {
 
 
 // handling units
-
 bool hasBuff(PUnit *unit, const char *buff) {
     vector<PBuff> buffs = unit->buffs;
     for (int i = 0; i < buffs.size(); ++i) {
@@ -475,6 +546,38 @@ bool hasBuff(PUnit *unit, const char *buff) {
     return false;
 }
 
+
+int surviveRounds(PUnit *host, PUnit *guest) {
+    /*
+     * 计算公式:
+     * 技能杀伤 = 先忽略技能预估战斗轮数,然后计算保守值
+     * 生命恢复 = 本轮全体生命恢复
+     * 死亡回合 = (hp + 生命恢复 - 技能杀伤) / (对方攻击 - 我方防守)
+     */
+    int host_hp_rcv = console->unitArg("hp", "rate", host);
+    int guest_hp_rcv = console->unitArg("hp", "rate", guest);
+    int host_r = (host->hp + host_hp_rcv) / max(host->atk - guest->def, 5);
+    int guest_r = (guest->hp + guest_hp_rcv) / max(guest->atk - host->def, 5);
+    return (host_r > guest_r) ? -guest_r : host_r;
+}
+
+
+PUnit* findID(vector<PUnit*> units, int _id) {
+    for (int i = 0; i < units.size(); ++i) {
+        if (units[i]->id == _id) {
+            return units[i];
+        }
+    }
+    return nullptr;
+}
+
+bool justBeAttacked(PUnit *test) {
+    if (hasBuff(test, "BeAttacked") &&
+            test->findBuff("BeAttcked")->timeLeft == HURT_LAST_TIME)
+        return true;
+    else
+        return false;
+}
 
 
 /************************************************************
@@ -521,6 +624,7 @@ void Commander::getUnits() {
     // friends
     filter.setCampFilter(CAMP);
     filter.setAvoidFilter("MilitaryBase", "a");
+    filter.setAvoidFilter("Observer", "w");
     cur_friends = console->friendlyUnits(filter);
     // base
     base = console->getMilitaryBase();
@@ -581,6 +685,7 @@ void Commander::attack() {
     console->baseAttack(lowest);    // go 基地攻击
 }
 
+
 void Commander::buyNewHero() {    // toedit 主要策略点
 #ifdef LOG
     logger << "... buyNewHero()" << endl;
@@ -634,6 +739,7 @@ void Commander::buyNewHero() {    // toedit 主要策略点
     }
 }
 
+
 void Commander::levelUp() {  // toedit 主要策略点
 #ifdef LOG
     logger << "... levelUp()" << endl;
@@ -683,7 +789,6 @@ void Commander::levelUp() {  // toedit 主要策略点
 }
 
 
-
 /************************************************************
  * Implementation: Tactic
  ************************************************************/
@@ -696,6 +801,336 @@ bool Tactic::hasPath() {
 /************************************************************
  * Implementation: class Hero
  ************************************************************/
+
+/*************************Setters**************************/
+
+PUnit *Hero::nearestEnemy(vector<PUnit *> &ignore) const {
+    /*
+     * 除矿以外一切可攻击单位,可以在ignore中指定被忽略的对象
+     */
+    // 可攻击对象不存在
+    if (view_enemy.size() == 0)
+        return nullptr;
+
+    double min_dist = MAP_SIZE * 1.0;
+    PUnit *selected = nullptr;
+
+    for (int i = 0; i < view_enemy.size(); ++i) {
+        PUnit *it = view_enemy[i];
+        double dist = dis(it->pos, pos);
+        if (dist < min_dist && !contain(ignore, it)) {
+            selected = it;
+            min_dist = dist;
+        }
+    }
+    return selected;
+}
+
+
+PUnit *Hero::nearestEnemy() const {
+    vector<PUnit *> empty;
+    empty.clear();
+    return nearestEnemy(empty);
+}
+
+
+void Hero::judgeContact() {
+    Hero last_r = getStoredHero(1);
+    if (last_r == NULL) {
+        contact = 1;
+        return;
+    }
+
+    // 默认继承,由于后续函数,可能是1,也可能是0
+    contact = last_r.contact;
+    // 刚被攻击立即变为1
+    if (justBeAttacked(punit)) {
+        contact = 1;
+    }
+}
+
+
+Hero Hero::getStoredHero(int prev_n) {
+    if (prev_n >= str_heroes.size())
+        return NULL;
+
+    vector<Hero> round = str_heroes[str_heroes.size() - 1 - prev_n];
+    Hero same = NULL;
+    for (int i = 0; i < round.size(); ++i) {
+        Hero temp = round[i];
+        if (temp.type == type && temp.id == id) {
+            same = temp;
+        }
+    }
+    return same;        // 可能是NULL,表示刚出现的英雄
+}
+
+
+// todo commander接收call backup并观察当前单位是否敌人,使用setTarget设置战术目标
+Pos Hero::callBackup() {
+    return pos;
+}
+
+
+void Hero::lockHotUnit() {      // toedit 主要策略点
+    /*
+     * @优先级:
+     * WinOrDie
+     * WaitRevive
+     * 继承上一轮
+     * 最弱单位
+     * @小心:
+     * 上一回合的热点单位死亡或召回
+     * 被卡住了无法攻击
+     * 追击了一段时间即停止
+     */
+    // 特殊buff
+    for (int i = 0; i < view_enemy.size(); ++i) {
+        PUnit *en = view_enemy[i];
+        // WinOrDie
+        if (hasBuff(en, "WinOrDie")) {
+            hot = en;
+            return;
+        }
+        // WaitRevive
+        if (hasBuff(en, "WaitRevive")) {
+            hot = en;
+            return;
+        }
+    }
+
+    // 继承
+    Hero last = getStoredHero(1);
+    if (last != NULL) {
+        PUnit *same_enemy = findID(view_enemy, last.hot_id);
+        if (same_enemy != nullptr && same_enemy->hp > 0) {      // 避免不存在/死亡/召回
+            hot = same_enemy;
+            return;
+        }
+    }
+
+    // 没有继承
+    int min_sr = 1000;      // 最少存活轮数
+    int max_sr = 0;         // 最多存活轮数
+    int index = -1;
+    bool has_beater = false;// 有人可打
+    for (int j = 0; j < view_enemy.size(); ++j) {
+        PUnit* enemy = view_enemy[j];
+        int sr_r = surviveRounds(punit, enemy);
+        if (sr_r < 0) {     // host强
+            sr_r = -sr_r;
+            if (sr_r < min_sr) {
+                min_sr = sr_r;
+                index = j;
+                has_beater = true;
+            }
+        } else {            // guest强
+            if (!has_beater && sr_r > max_sr) {
+                max_sr = sr_r;
+                index = j;
+            }
+        }
+    }
+    hot = view_enemy[index];
+}
+
+
+void Hero::checkHotUnit() {
+    int hot_last_hit = console->unitArg("lastHit", int2str(id), hot);
+    if (hot_last_hit == -1 || Round - hot_last_hit > ATK_CD[type]) {
+        // 根本没有打到或者近几回合都没有打到,可能出于某种原因,比如卡位或者逃跑追不上
+        vector<PUnit*> to_ignore;
+        to_ignore.clear();
+        to_ignore.push_back(hot);
+        hot = nearestEnemy(to_ignore);      // 有可能为空! toedit 更详细的决策:重载带忽略参数的lockHotUnit(vector...)
+    } else
+        return;
+}
+
+
+/**************************Helpers**************************/
+
+vector<PUnit *> Hero::whoHitMe() {
+
+}
+
+
+/**************************Actions**************************/
+
+void Hero::cdWalk() {
+    Pos hot_p = hot->pos;               // positon of hot target
+    // 撤离的距离为保持两者间距一个speed
+    Pos far_p = changePos(pos, hot_p, speed - dis(hot_p, pos), true);
+    console->move(far_p, punit);        // go
+}
+
+
+void Hero::fastFlee() {
+    Pos ref = nearestEnemy()->pos;
+    // 撤离距离为尽量远离任何最近的单位
+    Pos far_p = changePos(pos, ref, speed, true);
+}
+
+
+void Hero::stepBackwards() {
+    if (justBeAttacked(punit)) {
+        vector<PUnit *> hitters = whoHitMe();
+        Pos sum(0, 0);
+        for (int i = 0; i < hitters.size(); ++i) {
+            Pos p = hitters[i]->pos;
+            sum = sum + changePos(pos, p, range - dis(p, pos), true);
+        }
+        // 计算平均值
+        Pos target = sum * (1.0 / (double) hitters.size());
+        console->move(target, punit);       // go
+#ifdef  LOG
+        logger << "**[MSG] stepBackwards():" << endl;
+        logger << "**just hit by " << endl;
+        for (int j = 0; j < hitters.size(); ++j) {
+            logger << hitters[j]->pos << " ";
+        }
+        logger << endl;
+        logger << "**move to ";
+        logger << target << endl;
+#endif
+    }
+}
+
+
+void Hero::justMove() {
+    console->move(TACTIC_LIB[target].path, punit);      // go
+}
+
+
+/***********************************************************/
+
+void Hero::setPtr(PUnit *unit) {
+    if (unit == nullptr) {
+        name = "";
+        type = -1;
+        id = -1;
+        hp = 0;
+        mp = 0;
+        exp = 0;
+        level = 0;
+        atk = 0;
+        def = 0;
+        speed = 0;
+        view = 0;
+        range = 0;
+        contact = true;
+        hot = nullptr;
+        target = NULL;
+        hot_id = -1;
+        return;
+    }
+
+    punit = unit;
+    name = unit->name;
+    type = unit->typeId;
+    id = unit->id;
+    hp = unit->hp;
+    mp = unit->mp;
+    exp = unit->exp;
+    level = unit->level;
+    atk = unit->atk;
+    def = unit->def;
+    speed = unit->speed;
+    view = unit->speed;
+    pos = unit->pos;
+
+    // 读取记录
+    Hero last = getStoredHero(1);
+    if (last == NULL) {
+        contact = 1;
+        target = NULL;
+        hot_id = -1;
+    } else {
+        contact = last.contact;
+        target = last.target;
+        hot_id = last.hot_id;
+    }
+}
+
+
+void Hero::setUnits() {
+    UnitFilter filter;
+    filter.setAreaFilter(new Circle(punit->pos, punit->view), "a");
+    filter.setCampFilter(enemyCamp());
+    filter.setAvoidFilter("Observer", "a");
+    view_enemy = console->enemyUnits(filter);
+}
+
+
+Hero::Hero(PUnit *hero) {
+    // 顺序不能颠倒
+    setPtr(hero);
+    setUnits();
+    lockHotUnit();
+    checkHotUnit();
+}
+
+
+Hero::Hero(const Hero &hero) {
+    punit = nullptr;
+    name = hero.name;
+    type = hero.type;
+    hp = hero.hp;
+    mp = hero.mp;
+    exp = hero.exp;
+    level = hero.level;
+    atk = hero.atk;
+    def = hero.def;
+    speed = hero.speed;
+    view = hero.view;
+    range = hero.range;
+    pos.x = hero.pos.x;
+    pos.y = hero.pos.y;
+    contact = hero.contact;
+    target = hero.target;
+    hot = nullptr;
+    view_enemy.clear();
+}
+
+
+Hero::~Hero() {
+    view_enemy.clear();
+    punit = nullptr;
+    hot = nullptr;
+}
+
+
+/*************************Loader***************************/
+
+void Hero::setTarget(int tac_n) {
+    target = tac_n;
+}
+
+
+void Hero::Act() {
+    // todo
+    if (hot == nullptr || contact == 0) {
+        justMove();
+    } else if (contact == 1) {
+        switch (type) {
+            case 3:
+                hammerguardAttack();
+                break;
+            case 4:
+                masterAttack();
+                break;
+            case 5:
+                berserkerAttack();
+                break;
+            case 6:
+                scouterAttack();
+                break;
+            default:
+                break;
+        }
+    }
+}
+
 
 
 
