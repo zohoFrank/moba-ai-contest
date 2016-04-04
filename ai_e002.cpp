@@ -18,7 +18,7 @@
 
 using namespace std;
 
-typedef pair<int, Tactic> TRecord;
+typedef pair<int, Tactic> TacticRound;
 
 class Hero;
 
@@ -28,6 +28,7 @@ struct Tactic;
 /************************************************************
  * Const values
  ************************************************************/
+static const int GAME_ROUNDS = 1000;
 static const int KEY_POINTS_NUM = 8;
 static const Pos KEY_POINTS[] = {
         Pos(75, 146), Pos(116, 114), Pos(136, 76), Pos(117, 33),
@@ -136,10 +137,11 @@ void releaseVector(vector<T *> vct);
 template<typename T>
 bool contain(vector<T> vct, const T &elem);
 
-bool operator==(const PUnit *a, const PUnit *b);
+bool operator== (const PUnit *a, const PUnit *b);
 
-bool operator==(const Hero &a, const Hero &b);
+bool operator== (const Hero &a, const Hero &b);
 
+bool operator< (const TacticRound &a, const TacticRound &b);
 // Handling stored data
 template<typename T>
 void clearOldInfo(vector<T> &vct);                              // 及时清理陈旧储存信息
@@ -164,7 +166,7 @@ int teamAtk(vector<PUnit *> vct);
 // global_state: inferior, equal, superior
 struct Commander {
     vector<Hero> heroes;
-    vector<Pos> backups;                            // 求援的地点汇总
+    vector<TacticRound> plans;                      // 计划执行的计划
 
     /**********************************************************/
     // constructor
@@ -187,13 +189,11 @@ struct Commander {
 
     /**********************************************************/
     // Interface to outside
-    void addTactic(int i);                          // 增加一个战术
+    void addTactic(int i, int r);                   // 增加一个战术和对应执行轮数
     // LOADER
     void RunAnalysis();
-
     void HeroesAct();
-
-    void Store();                            // 储存
+    void StoreAndClean();                            // 储存
 
 };
 
@@ -286,7 +286,8 @@ public:
     void setTarget(int tac_n);                  // 设置战术
 
     // LOADER
-    void Act();         // 调用一切接口
+    void Act();         // 调用一切动作接口
+    void StoreMe();     // 储存该英雄信息
 };
 
 
@@ -294,13 +295,14 @@ public:
 void player_ai(const PMap &map, const PPlayerInfo &info, PCommand &cmd) {
     // Define Tactics
     const int TACTIC_APPLIED[] = {};
+    const int APPLIED_ROUND[] = {};
     int TACTIC_NUM = sizeof(TACTIC_APPLIED) / sizeof(int);
     // Create pointers
     console = new Console(map, info, cmd);
     commander = new Commander();
     // Set tactics
     for (int i = 0; i < TACTIC_NUM; ++i) {
-        commander->addTactic(i);
+        commander->addTactic(i, APPLIED_ROUND[i]);
     }
     // Run Commander, analyze and arrange tactics
     commander->RunAnalysis();
@@ -309,7 +311,8 @@ void player_ai(const PMap &map, const PPlayerInfo &info, PCommand &cmd) {
     commander->HeroesAct();
 
     // Store all
-    commander->Store();
+    commander->StoreAndClean();
+
 
     delete commander;
     delete console;
@@ -482,6 +485,11 @@ bool operator== (const PUnit *a, const PUnit *b) {
 }
 
 
+bool operator< (const TacticRound &a, const TacticRound &b) {
+    return a.first < b.first;
+}
+
+
 template<typename T>
 void releaseVector(vector<T *> vct) {
     for (int i = 0; i < vct.size(); ++i) {
@@ -589,7 +597,9 @@ int teamAtk(vector<PUnit *> vct) {
 /************************************************************
  * Implementation: class Commander
  ************************************************************/
-// constructor
+
+/**********************Constructors***********************/
+
 Commander::Commander() {
 #ifdef LOG
     logger << "... Construct Commander" << endl;
@@ -621,6 +631,7 @@ Commander::~Commander() {
     releaseVector(vi_monsters);
 }
 
+/***********************Help Constructors************************/
 
 void Commander::getUnits() {
 #ifdef LOG
@@ -666,6 +677,12 @@ void Commander::getUnits() {
 #endif
 }
 
+/*************************Tactics**************************/
+
+
+
+
+/*************************Base actions**************************/
 
 void Commander::attack() {
 #ifdef LOG
@@ -792,6 +809,35 @@ void Commander::levelUp() {  // toedit 主要策略点
         console->buyHeroLevel(toLevelUp[j]);    // go 英雄买活
     }
     delete flags;
+}
+
+
+/*************************Interface**************************/
+
+
+void Commander::HeroesAct() {
+    for (int i = 0; i < heroes.size(); ++i) {
+        heroes[i].Act();
+    }
+}
+
+void Commander::addTactic(int i, int r) {
+    if (i < 0 || i >= TACTIC_LIB.size() || r < 0 || r > GAME_ROUNDS)
+        return;
+
+    Tactic t = TACTIC_LIB[i];
+    plans.push_back(make_pair(r, t));
+}
+
+
+void Commander::StoreAndClean() {
+    // fixme need reviewing
+    for (int i = 0; i < heroes.size(); ++i) {
+        heroes[i].StoreMe();
+    }
+    str_money.push_back(Economy);
+    clearOldInfo(str_money);
+    clearOldInfo(str_heroes);
 }
 
 
@@ -1123,7 +1169,6 @@ void Hero::contactAttack() {
             break;
     }
 }
-
 
 
 /***********************************************************/
