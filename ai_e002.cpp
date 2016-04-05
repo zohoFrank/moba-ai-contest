@@ -767,8 +767,8 @@ void Commander::tacticArrange() {
     int n = 0;
     // 所有人全部重新分配
     for (int i = 0; i < heroes.size(); ++i) {
-
-        n = ++n % store.size();
+        heroes[i].setTarget(store[n].second);
+        n = (int) (++n % store.size());
     }
 }
 
@@ -782,7 +782,7 @@ void Commander::attack() {
 
     Pos our_base = MILITARY_BASE_POS[CAMP];
     UnitFilter filter;
-    filter.setAvoidFilter("MilitaryBase");
+    filter.setAvoidFilter("MilitaryBase", "a");
     filter.setAreaFilter(new Circle(our_base, MILITARY_BASE_RANGE), "a");
     vector<PUnit *> enemies = console->enemyUnits(filter);
     if (enemies.empty()) return;
