@@ -258,6 +258,9 @@ public:
 
 /*#################### MAIN FUNCTION #######################*/
 void player_ai(const PMap &map, const PPlayerInfo &info, PCommand &cmd) {
+#ifdef LOG
+    logger << "====GAME STARTS====" << endl;
+#endif
     makeTactic();
 
     // Create pointers
@@ -711,6 +714,7 @@ void Commander::analyzeSituation() {        // todo 暂时没想好可靠算法
      * 分析局势,并修改或增加战术池中的战术
      * *暂时先完成近距离协作机制
      */
+
     // 近距离支援
     set<Pos> store;     // 避免重复
     for (int i = 0; i < heroes.size(); ++i) {
@@ -760,13 +764,26 @@ void Commander::tacticArrange() {
             break;
         }
     }
+
     // 近距离支援
-    // todo
+    if (backup.empty()) return;
+
+    for (int j = 0; j < heroes.size(); ++j) {
+        if (heroes[j].hot != nullptr) return;           // 有打击目标则不支援
+        Hero h = heroes[j];
+        for (int i = 0; i < backup.size(); ++i) {
+            Pos bk = backup[i];
+            if (dis(h.pos, bk) <= BACKUP_RANGE) {
+                h.setTarget(bk);
+            }
+        }
+    }
+
     // 战术安排
     if (store.empty()) return;              // 如果没有要执行的战术,不改变
     int n = 0;
     // 所有人全部重新分配
-    for (int i = 0; i < heroes.size(); ++i) {
+    for (int i = 0; i < heroes.size(); ++i) {       // 循环安排
         heroes[i].setTarget(store[n].second);
         n = (int) (++n % store.size());
     }
@@ -908,7 +925,7 @@ void Commander::buyLife() {
 
 
 void Commander::callBack() {
-    // todo 暂时设计成强制设置Hero的Tactic值,暂时认为快速召回没有太大意义
+    // todo 设计成强制设置Hero的Tactic值,暂时认为快速召回没有太大意义
     // 条件判断
     UnitFilter filter;
     filter.setAreaFilter(new Circle(MILITARY_BASE_POS[CAMP], MILITARY_BASE_VIEW), "a");
