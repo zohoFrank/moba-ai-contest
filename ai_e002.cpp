@@ -1,8 +1,8 @@
 // 调试开关
-#define LOG
+//#define LOG
 
 #include "console.h"
-#include <fstream>
+//#include <fstream>
 #include <iomanip>
 #include <sstream>
 #include <map>
@@ -563,6 +563,8 @@ int surviveRounds(PUnit *host, PUnit *guest) {
 
 
 PUnit *findID(vector<PUnit *> units, int _id) {
+    if (_id == -1) return nullptr;
+
     for (int i = 0; i < units.size(); ++i) {
         if (units[i]->id == _id) {
             return units[i];
@@ -780,6 +782,8 @@ void Commander::tacticArrange() {
     // 选出该执行的战术,GamePlans已排序,越靠后Round越小
     vector<TacticRound> store;
     while (true) {
+        if (GamePlans.empty()) break;
+
         TacticRound tr = GamePlans.back();
         if (tr.first == Round) {
             store.push_back(tr);
@@ -852,7 +856,7 @@ void Commander::buyNewHero() {    // toedit 主要策略点
     // 先标记,后购买.循环判断,可以连续买英雄
     vector<string> to_buy;
     while (cost <= BUY_NEW_COST * Economy) {
-        switch (n_heroes) {     // go 买英雄
+        switch (n_heroes) {
             case 0:
                 to_buy.push_back("Hammerguard");
                 break;
@@ -883,10 +887,13 @@ void Commander::buyNewHero() {    // toedit 主要策略点
         cost += HERO_COST[n_heroes];
         n_heroes++;
     }
+    if (to_buy.empty())
+        return;
+
     to_buy.pop_back();      //  弹出多余的那个
     // 依次购买
     for (int i = 0; i < to_buy.size(); ++i) {
-        console->chooseHero(to_buy[i]);
+        console->chooseHero(to_buy[i]);             // go
     }
 }
 
@@ -1064,6 +1071,7 @@ void Hero::lockHotUnit() {      // toedit 主要策略点,这是在[构造函数
      */
     if (my_view_en.size() == 0) {
         hot = nullptr;
+        hot_id = -1;
         return;
     }
 
@@ -1073,28 +1081,31 @@ void Hero::lockHotUnit() {      // toedit 主要策略点,这是在[构造函数
         // WinOrDie
         if (hasBuff(en, "WinOrDie")) {
             hot = en;
+            hot_id = en->id;
             return;
         }
         // WaitRevive
         if (hasBuff(en, "WaitRevive")) {
             hot = en;
+            hot_id = en->id;
             return;
         }
     }
 
-    // 继承
-    Hero *last = getStoredHero(1);
-    if (last != nullptr) {
-        PUnit *same_enemy = findID(my_view_en, last->hot_id);
-        if (same_enemy != nullptr && same_enemy->hp > 0) {      // 避免不存在/死亡/召回
-            hot = same_enemy;
-            return;
-        }
-    }
+//    // 继承
+//    Hero *last = getStoredHero(1);
+//    if (last != nullptr) {
+//        PUnit *same_enemy = findID(my_view_en, last->hot_id);
+//        if (same_enemy != nullptr && same_enemy->hp > 0) {      // 避免不存在/死亡/召回
+//            hot = same_enemy;
+//            hot_id = same_enemy->id;
+//            return;
+//        }
+//    }
 
     // 没有继承
     int min_sr = 1000;      // 最少存活轮数
-    int max_sr = 0;         // 最多存活轮数
+    int max_sr = -1;         // 最多存活轮数
     int index = -1;
     bool has_beater = false;// 有人可打
     for (int j = 0; j < my_view_en.size(); ++j) {
@@ -1115,6 +1126,11 @@ void Hero::lockHotUnit() {      // toedit 主要策略点,这是在[构造函数
         }
     }
     hot = my_view_en[index];
+    if (hot == nullptr) {
+        hot_id = -1;
+    } else {
+        hot_id = hot->id;
+    }
 }
 
 
@@ -1173,7 +1189,7 @@ bool Hero::timeToFlee() {
 void Hero::cdWalk() {
     Pos hot_p = hot->pos;               // positon of hot target
     // 撤离的距离为保持两者间距一个speed
-    Pos far_p = changePos(pos, hot_p, speed - dis(hot_p, pos), true);
+    Pos far_p = changePos(pos, hot_p, speed, true);
     console->move(far_p, punit);        // go
 }
 
@@ -1183,15 +1199,18 @@ void Hero::fastFlee() {
     if (hasBuff(punit, "WinOrDie"))
         return;
 
-    Pos ref = nearestEnemy()->pos;
-    // 撤离距离为尽量远离任何最近的单位
-    if (type == 4 && punit->canUseSkill("Blink")) {     // master的闪烁
-        Pos far_p = changePos(pos, ref, BLINK_RANGE, true);
-        console->useSkill("Blink", far_p, punit);       // go
-    } else {
-        Pos far_p = changePos(pos, ref, speed, true);
-        console->move(far_p, punit);                    // go
-    }
+//    Pos ref = nearestEnemy()->pos;
+//    // 撤离距离为尽量远离任何最近的单位
+//    if (type == 4 && punit->canUseSkill("Blink")) {     // master的闪烁
+//        Pos far_p = changePos(pos, ref, BLINK_RANGE, true);
+//        console->useSkill("Blink", far_p, punit);       // go
+//    } else {
+//        Pos far_p = changePos(pos, ref, speed, true);
+//        console->move(far_p, punit);                    // go
+//    }
+
+    // 直接撤回老家(中途可能改主意)
+    console->move(MILITARY_BASE_POS[CAMP], punit);
 }
 
 
@@ -1221,7 +1240,7 @@ void Hero::stepBackwards() {
 
 
 void Hero::justMove() {
-    if (type == 6 && punit->canUseSkill("SetObserver")) {
+    if (Round % SET_OBSERVER_MAXCD[0] == 0 && type == 6 && punit->canUseSkill("SetObserver")) {
         // 如果离关键点比较近,那么插眼
         Pos nearest_key = nearestKP(pos);
         if (dis(nearest_key, pos) < SET_OBSERVER_RANGE) {
@@ -1309,12 +1328,6 @@ void Hero::contactAttack() {
         return;
     }
 
-    // 无攻击目标
-    if (hot == nullptr) {
-        justMove();
-        return;
-    }
-
     // attack
     switch (type) {
         case 3:
@@ -1373,7 +1386,7 @@ void Hero::setPtr(PUnit *unit) {
     // 读取记录
     Hero *last = getStoredHero(1);
     if (last == nullptr) {
-        target = 0;
+        target = TacLib[0];
         hot_id = -1;
     } else {
         target = last->target;
@@ -1459,10 +1472,9 @@ void Hero::StoreMe() {
 
 
 /*
- * 1.近距离协助机制
-// * 2.cdWalk()
-// * 3.重写contactAttack()
- * 4.分配任务采取直接指定制,(过n回合全局分析一下效果,再调整战术——暂时不写)
- *                      或者,按英雄能力阶段分配战术,能力满足要求时组队打野
- * 5.
+ * todo 要更改的内容
+ * 1. 集群攻击某单位(将lockhot移到Commander里面)
+ * 2. 逃窜的连续性
+ * 3. Berserker的致命一击
+ * 4. 系统调用??
  */
