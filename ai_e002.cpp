@@ -14,6 +14,7 @@ typedef Pos Tactic;
 typedef pair<int, Tactic> TacticRound;
 
 class Hero;
+
 struct Commander;
 /*######################## DATA ###########################*/
 /************************************************************
@@ -38,8 +39,8 @@ static const int ATK_CD[] = {
 /************************************************************
  * Policy const values
  ************************************************************/
-const int TACTIC_APPLIED[] = {};
-const int APPLIED_ROUND[] = {};
+const int TACTIC_APPLIED[] = {0};
+const int APPLIED_ROUND[] = {0};
 
 // Commander
 // Commander::levelUp
@@ -47,7 +48,6 @@ static const double LEVEL_UP_COST = 0.5;    // 升级金钱比例
 // Commander::buyNewHero
 static const double BUY_NEW_COST = 1.0;     // 买新英雄花费
 
-static const int KEEP_TACTIC = 10;          // 设置同一战术的执行局数
 // Commander::callBack()
 static const int BACK_BASE = 2;             // 面对多少敌人,基地召回我方英雄
 
@@ -71,10 +71,8 @@ static map<int, Tactic> TacLib;
  ************************************************************/
 static Console *console = nullptr;
 static Commander *commander = nullptr;
-static int Round = 0;
+static int Round = -1;
 int Economy;                                    // 经济
-
-vector<int> tactic;                             // 设置战术代号
 
 vector<PUnit *> cur_friends;                    // 当前友军英雄
 const PUnit *base;                              // 我的基地
@@ -121,13 +119,14 @@ template<typename T>
 void releaseVector(vector<T *> vct);
 
 template<typename T>
-bool contain(vector<T*> vct, T* elem);
+bool contain(vector<T *> vct, T *elem);
 
-bool operator== (const PUnit &a, const PUnit &b);
+bool operator==(const PUnit &a, const PUnit &b);
 
-bool operator< (const Pos &a, const Pos &b);
+bool operator<(const Pos &a, const Pos &b);
 
-bool operator< (const TacticRound &a, const TacticRound &b);
+bool operator<(const TacticRound &a, const TacticRound &b);
+
 // Handling stored data
 template<typename T>
 void clearOldInfo(vector<T> &vct);                  // 及时清理陈旧储存信息
@@ -140,9 +139,10 @@ int enemyCamp();                                    // 敌人的camp
 // Unit
 bool hasBuff(PUnit *unit, const char *buff);        // 是否有某buff
 bool justBeAttacked(PUnit *test);
-vector<PUnit *> range_units(int range, int camp, vector<string> avoids);    // 范围内的单位过滤器
+
 int surviveRounds(PUnit *host, PUnit *guest);       // 计算存活轮数,如果host强,返回guest存活,负整数;否则,返回host存活,正整数
-PUnit* findID(vector<PUnit*> units, int _id);
+PUnit *findID(vector<PUnit *> units, int _id);
+
 int teamAtk(vector<PUnit *> vct);
 
 /************************************************************
@@ -178,6 +178,7 @@ struct Commander {
     /**********************************************************/
     // LOADER
     void RunAnalysis();
+
     void TeamAct();                                 // 基地和英雄动作
     void StoreAndClean();                           // 储存
 
@@ -213,12 +214,12 @@ public:
     PUnit *nearestEnemy() const;
 
     // setter
-    Hero* getStoredHero(int prev_n);            // 获得之前prev_n局的储存对象
+    Hero *getStoredHero(int prev_n);            // 获得之前prev_n局的储存对象
     void lockHotUnit();                         // 锁定攻击目标
     void checkHotUnit();                        // 再次确认攻击目标
 
     /*************************Helpers***************************/
-    vector<PUnit*> whoHitMe();                  // 返回攻击自己的单位
+    vector<PUnit *> whoHitMe();                  // 返回攻击自己的单位
     bool timeToFlee();                          // 是否应该逃窜
 
     /**************************Actions**************************/
@@ -259,7 +260,7 @@ public:
 /*#################### MAIN FUNCTION #######################*/
 void player_ai(const PMap &map, const PPlayerInfo &info, PCommand &cmd) {
 #ifdef LOG
-    logger << "====GAME STARTS====" << endl;
+    logger << "====ROUND " << Round << " STARTS====" << endl;
 #endif
     makeTactic();
 
@@ -278,6 +279,10 @@ void player_ai(const PMap &map, const PPlayerInfo &info, PCommand &cmd) {
 
     delete commander;
     delete console;
+
+#ifdef LOG
+    logger << endl << endl << endl;
+#endif
 }
 
 
@@ -288,9 +293,13 @@ void player_ai(const PMap &map, const PPlayerInfo &info, PCommand &cmd) {
  ************************************************************/
 
 #ifdef LOG
+
 // log related
 void printUnit(vector<PUnit *> units) {
-    if (units.empty()) return;
+    if (units.empty()) {
+        logger << "!! get empty lists" << endl;
+        return;
+    };
     // if hero
     // print title
     logger << left << setw(14) << "NAME";
@@ -333,7 +342,7 @@ void printUnit(vector<PUnit *> units) {
 void printHeroList(vector<Hero> units) {
     logger << "@Hero list" << endl;
     if (units.empty()) {
-        logger << "!! get empty units" << endl;
+        logger << "!! get empty Hero list" << endl;
         return;
     }
     // print title of each column
@@ -360,8 +369,10 @@ void printHeroList(vector<Hero> units) {
         logger << left << setw(5) << unit.atk;
         logger << left << setw(5) << unit.def;
         // POS/TAC
-        logger << left << setw(10) << unit.pos;
-        logger << left << setw(10) << units[i].target;
+        string p = int2str(unit.pos.x) + "," + int2str(unit.pos.y);
+        logger << left << setw(10) << p;
+        string t = int2str(unit.target.x) + "," + int2str(unit.target.y);
+        logger << left << setw(10) << t;
         // BUFF
         vector<PBuff> buff = unit.punit->buffs;
         for (int j = 0; j < buff.size(); ++j) {
@@ -436,7 +447,7 @@ int enemyCamp() {
 
 // data structure related
 template<typename T>
-bool contain(vector<T*> vct, T *elem) {
+bool contain(vector<T *> vct, T *elem) {
 //    return binary_search(vct.begin(), vct.end(), elem); 英雄太少没必要
     for (int i = 0; i < vct.size(); ++i) {
         if (*vct[i] == *elem) {
@@ -447,7 +458,7 @@ bool contain(vector<T*> vct, T *elem) {
 }
 
 
-bool operator== (const PUnit &a, const PUnit &b) {
+bool operator==(const PUnit &a, const PUnit &b) {
     if (
             a.typeId == b.typeId &&
             a.id == b.id &&
@@ -461,7 +472,7 @@ bool operator== (const PUnit &a, const PUnit &b) {
 }
 
 
-bool operator< (const Pos &a, const Pos &b) {
+bool operator<(const Pos &a, const Pos &b) {
     if (a.x != b.x) {
         return a.x < b.x;
     } else {
@@ -470,7 +481,7 @@ bool operator< (const Pos &a, const Pos &b) {
 }
 
 
-bool operator< (const TacticRound &a, const TacticRound &b) {
+bool operator<(const TacticRound &a, const TacticRound &b) {
     return a.first > b.first;       // 从大到小排序,有利于当作栈调用
 }
 
@@ -551,7 +562,7 @@ int surviveRounds(PUnit *host, PUnit *guest) {
 }
 
 
-PUnit* findID(vector<PUnit*> units, int _id) {
+PUnit *findID(vector<PUnit *> units, int _id) {
     for (int i = 0; i < units.size(); ++i) {
         if (units[i]->id == _id) {
             return units[i];
@@ -563,7 +574,7 @@ PUnit* findID(vector<PUnit*> units, int _id) {
 
 bool justBeAttacked(PUnit *test) {
     if (hasBuff(test, "BeAttacked") &&
-            test->findBuff("BeAttcked")->timeLeft == HURT_LAST_TIME)
+        test->findBuff("BeAttcked")->timeLeft == HURT_LAST_TIME)
         return true;
     else
         return false;
@@ -584,7 +595,7 @@ void makeTactic() {
      * 0-9 矿区
      * 10-11 基地
      */
-    if (Round != 0) return;
+    if (Round > 0) return;
 
     // Set Default Tactics
     // 0-9,预留给矿区
@@ -611,6 +622,17 @@ void makeTactic() {
 
     // sorting
     sort(GamePlans.begin(), GamePlans.end());
+
+#ifdef LOG
+    logger << "@Game Plans" << endl;
+    logger << left << setw(5) << "RND";
+    logger << left << setw(10) << "POS" << endl;
+    for (int k = 0; k < GamePlans.size(); ++k) {
+        logger << left << setw(5) << GamePlans[k].first;
+        string p = int2str(GamePlans[k].second.x) + "," + int2str(GamePlans[k].second.y);
+        logger << left << setw(10) << p << endl;
+    }
+#endif
 }
 
 
@@ -622,8 +644,10 @@ void makeTactic() {
 
 Commander::Commander() {
 #ifdef LOG
-    logger << "... Construct Commander" << endl;
+    logger << "... Con. Commander" << endl;
 #endif
+    // CAMP
+    CAMP = console->camp();
     // Round
     Round = console->round();
     // Economy
@@ -638,62 +662,76 @@ Commander::Commander() {
 
 Commander::~Commander() {
 #ifdef LOG
-    logger << "... Deconstruct Commander" << endl;
+    logger << "... Decon. Commander" << endl;
 #endif
-    tactic.clear();
+    backup.clear();
     heroes.clear();
     // PUnit*不能释放!
-    base = nullptr;
     releaseVector(cur_friends);
+    base = nullptr;
     releaseVector(vi_enemies);
     en_base = nullptr;
     releaseVector(vi_mines);
     releaseVector(vi_monsters);
+    clearOldInfo(str_money);
+    clearOldInfo(str_heroes);
 }
 
 /**************************Helpers**************************/
 
 void Commander::getUnits() {
-#ifdef LOG
-    logger << "... getUnits()" << endl;
-#endif
-    UnitFilter filter;
     // friends
-    filter.setCampFilter(CAMP);
-    filter.setAvoidFilter("MilitaryBase", "a");
-    filter.setAvoidFilter("Observer", "w");
-    cur_friends = console->friendlyUnits(filter);
+    UnitFilter f1;
+    f1.setCampFilter(CAMP);
+    f1.setAvoidFilter("MilitaryBase", "a");
+    f1.setAvoidFilter("Observer", "w");
+    cur_friends = console->friendlyUnits(f1);
     // base
     base = console->getMilitaryBase();
 
     // enemies 没有cleanAll()
-    filter.setCampFilter(enemyCamp());
-    cur_friends = console->enemyUnits(filter);
+    UnitFilter f2;
+    f2.setCampFilter(enemyCamp());
+    f2.setAvoidFilter("MilitaryBase", "a");
+    f2.setAvoidFilter("Observer", "w");
+    vi_enemies = console->enemyUnits(f2);
     // en_base
-    filter.cleanAll();
-    filter.setCampFilter(enemyCamp());
-    filter.setTypeFilter("MilitaryBase", "a");
-    vector<PUnit *> fi_units = console->enemyUnits(filter);
+    UnitFilter f3;
+    f3.setCampFilter(enemyCamp());
+    f3.setTypeFilter("MilitaryBase", "a");
+    vector<PUnit *> fi_units = console->enemyUnits(f3);
     if (fi_units.size() != 0 && fi_units[0]->isBase()) {
         en_base = fi_units[0];
     }
 
     // vi_mines
-    filter.cleanAll();
-    filter.setTypeFilter("Mine", "a");
-    vi_mines = console->enemyUnits(filter);
+    UnitFilter f4;
+    f4.setTypeFilter("Mine", "a");
+    vi_mines = console->enemyUnits(f4);
     // vi_monsters
-    filter.cleanAll();
-    filter.setTypeFilter("Dragon", "a");
-    filter.setTypeFilter("Roshan", "w");
-    vi_monsters = console->enemyUnits(filter);
+    UnitFilter f5;
+    f5.cleanAll();
+    f5.setTypeFilter("Dragon", "a");
+    f5.setTypeFilter("Roshan", "w");
+    vi_monsters = console->enemyUnits(f5);
 
 #ifdef LOG
+    // 检查筛选是否正确
     for (int i = 0; i < vi_monsters.size(); ++i) {
         if (!vi_monsters[i]->isWild()) {
             logger << "!ERROR! Have non-wild units in vector vi_monsters!" << endl;
         }
     }
+    // print
+    logger << "@Friends" << endl;
+    printUnit(cur_friends);
+    logger << endl;
+    logger << "@Visible enemies" << endl;
+    printUnit(vi_enemies);
+    logger << endl;
+    logger << "@Visible monsters" << endl;
+    printUnit(vi_monsters);
+    logger << endl;
 #endif
 }
 
@@ -730,18 +768,6 @@ void Commander::analyzeSituation() {        // todo 暂时没想好可靠算法
         backup.push_back(p);
         index++;
     }
-
-#ifdef LOG
-    // print tactics
-    logger << "@Tactics applied" << endl;
-    logger << left << setw(5) << "RND";
-    logger << left << setw(10) << "POS";
-    logger << endl;
-    for (int k = 0; k < GamePlans.size(); ++k) {
-        logger << left << setw(5) << GamePlans[k].first;
-        logger << left << setw(10) << GamePlans[k].second << endl;
-    }
-#endif
 }
 
 
@@ -766,8 +792,6 @@ void Commander::tacticArrange() {
     }
 
     // 近距离支援
-    if (backup.empty()) return;
-
     for (int j = 0; j < heroes.size(); ++j) {
         if (heroes[j].hot != nullptr) return;           // 有打击目标则不支援
         Hero h = heroes[j];
@@ -781,10 +805,14 @@ void Commander::tacticArrange() {
 
     // 战术安排
     if (store.empty()) return;              // 如果没有要执行的战术,不改变
+
     int n = 0;
     // 所有人全部重新分配
     for (int i = 0; i < heroes.size(); ++i) {       // 循环安排
         heroes[i].setTarget(store[n].second);
+#ifdef LOG
+        logger << "$" << heroes[i].id << " is ordered to do task " << n << endl;
+#endif
         n = (int) (++n % store.size());
     }
 }
@@ -793,10 +821,6 @@ void Commander::tacticArrange() {
 /*************************Base actions**************************/
 
 void Commander::attack() {
-#ifdef LOG
-    logger << "... attack()" << endl;
-#endif
-
     Pos our_base = MILITARY_BASE_POS[CAMP];
     UnitFilter filter;
     filter.setAvoidFilter("MilitaryBase", "a");
@@ -818,10 +842,6 @@ void Commander::attack() {
 
 
 void Commander::buyNewHero() {    // toedit 主要策略点
-#ifdef LOG
-    logger << "... buyNewHero()" << endl;
-#endif
-
     /*
      * 出新英雄顺序是:H->M->B->S->M->H->B->S
      * ??感觉出英雄顺序影响难以评估
@@ -933,10 +953,10 @@ void Commander::callBack() {
     filter.setCampFilter(enemyCamp());
     int base_en = (int) console->enemyUnits(filter).size();
     if (base_en >= BACK_BASE)
-    // 进行结算,召回响应人数的己方英雄
-    for (int i = 0; i < base_en; ++i) {
-        heroes[i].setTarget(MILITARY_BASE_POS[CAMP]);
-    }
+        // 进行结算,召回响应人数的己方英雄
+        for (int i = 0; i < base_en; ++i) {
+            heroes[i].setTarget(MILITARY_BASE_POS[CAMP]);
+        }
 }
 
 
@@ -956,12 +976,16 @@ void Commander::TeamAct() {
     buyNewHero();
     buyLife();
     callBack();
+    attack();
     // heroes
     for (int i = 0; i < heroes.size(); ++i) {
         heroes[i].Act();
     }
     // hero/base
     levelUp();
+#ifdef LOG
+    printHeroList(heroes);
+#endif
 }
 
 
@@ -970,8 +994,6 @@ void Commander::StoreAndClean() {
         heroes[i].StoreMe();
     }
     str_money.push_back(Economy);
-    clearOldInfo(str_money);
-    clearOldInfo(str_heroes);
 }
 
 
@@ -1012,14 +1034,14 @@ PUnit *Hero::nearestEnemy() const {
 }
 
 
-Hero* Hero::getStoredHero(int prev_n) {
+Hero *Hero::getStoredHero(int prev_n) {
     if (prev_n >= str_heroes.size())
         return nullptr;
 
     vector<Hero> round = str_heroes[str_heroes.size() - 1 - prev_n];
-    Hero* same = nullptr;
+    Hero *same = nullptr;
     for (int i = 0; i < round.size(); ++i) {
-        Hero* temp = &round[i];
+        Hero *temp = &round[i];
         if (temp->type == type && temp->id == id) {
             same = temp;
         }
@@ -1061,7 +1083,7 @@ void Hero::lockHotUnit() {      // toedit 主要策略点,这是在[构造函数
     }
 
     // 继承
-    Hero* last = getStoredHero(1);
+    Hero *last = getStoredHero(1);
     if (last != nullptr) {
         PUnit *same_enemy = findID(my_view_en, last->hot_id);
         if (same_enemy != nullptr && same_enemy->hp > 0) {      // 避免不存在/死亡/召回
@@ -1076,7 +1098,7 @@ void Hero::lockHotUnit() {      // toedit 主要策略点,这是在[构造函数
     int index = -1;
     bool has_beater = false;// 有人可打
     for (int j = 0; j < my_view_en.size(); ++j) {
-        PUnit* enemy = my_view_en[j];
+        PUnit *enemy = my_view_en[j];
         int sr_r = surviveRounds(punit, enemy);
         if (sr_r < 0) {     // host强
             sr_r = -sr_r;
@@ -1103,7 +1125,7 @@ void Hero::checkHotUnit() {
     int hot_last_hit = console->unitArg("lastHit", int2str(id), hot);
     if (hot_last_hit == -1 || Round - hot_last_hit > ATK_CD[type]) {
         // 根本没有打到或者近几回合都没有打到,可能出于某种原因,比如卡位或者逃跑追不上
-        vector<PUnit*> to_ignore;
+        vector<PUnit *> to_ignore;
         to_ignore.clear();
         to_ignore.push_back(hot);
         hot = nearestEnemy(to_ignore);      // 有可能为空! toedit 更详细的决策:重载带忽略参数的lockHotUnit(vector...)
@@ -1118,7 +1140,9 @@ vector<PUnit *> Hero::whoHitMe() {
     /*
      * 只计算这一回合和上一回合遭遇的攻击
      */
-    vector<PUnit*> hitters;
+    vector<PUnit *> hitters;
+    if (Round < 1) return hitters;
+
     // 遍历,依次考察lastHit接口
     for (int i = 0; i < vi_enemies.size(); ++i) {
         int en_id = vi_enemies[i]->id;
@@ -1347,9 +1371,9 @@ void Hero::setPtr(PUnit *unit) {
     pos = unit->pos;
 
     // 读取记录
-    Hero* last = getStoredHero(1);
+    Hero *last = getStoredHero(1);
     if (last == nullptr) {
-        hot = nullptr;
+        target = 0;
         hot_id = -1;
     } else {
         target = last->target;
@@ -1410,6 +1434,14 @@ void Hero::Act() {
 
 void Hero::StoreMe() {
     Hero temp(*this);
+    if (str_heroes.empty()) {
+        vector<Hero> vct;
+        vct.clear();
+        vct.push_back(temp);
+        str_heroes.push_back(vct);
+        return;
+    }
+
     // 检查最后一个向量的round
     int last_r = str_heroes.back().back().round;
     // 分情况处理储存
