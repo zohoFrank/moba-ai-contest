@@ -50,7 +50,7 @@ const int APPLIED_ROUND[] = {0};
 
 // Commander
 // Commander::levelUp
-static const double LEVEL_UP_COST = 0.5;    // 升级金钱比例
+static const double LEVEL_UP_COST = 0.6;    // 升级金钱比例
 // Commander::buyNewHero
 static const double BUY_NEW_COST = 1.0;     // 买新英雄花费
 static int BUY_RANK = 43124132;             // 请参考hero_name
@@ -146,6 +146,8 @@ void makeTactic();                                  // 在第0轮调用一下
 int enemyCamp();                                    // 敌人的camp
 
 // Unit
+int buyNewCost(int cost_indx);                      // 当前购买新英雄成本,参数为HERO_NAME的索引
+int fullLevelN();                                   // 当前满级英雄数
 bool hasBuff(PUnit *unit, const char *buff);        // 是否有某buff
 bool justBeAttacked(PUnit *test);
 
@@ -182,6 +184,7 @@ struct Commander {
     void buyNewHero();                              // 买英雄
     void buyLife();                                 // 买活英雄
     void levelUp();                                 // 升级英雄
+    void spendMoney();                              // 买英雄/买等级/买活的选择
     void callBack();                                // 召回英雄
 
     /**********************************************************/
@@ -571,6 +574,28 @@ void clearOldInfo(vector<T> &vct) {
 
 
 // handling units
+int buyNewCost(int cost_idx) {
+    int type = cost_idx + 3;
+    int occurs = 1;
+    for (int i = 0; i < cur_friends.size(); ++i) {
+        if (cur_friends[i]->typeId == type) {
+            occurs++;
+        }
+    }
+    return HERO_COST[cost_idx] * occurs;
+}
+
+
+int fullLevelN() {
+    int n = 0;
+    for (int i = 0; i < cur_friends.size(); ++i) {
+        if (cur_friends[i]->level >= 5)
+            n++;
+    }
+    return n;
+}
+
+
 bool hasBuff(PUnit *unit, const char *buff) {
     vector<PBuff> buffs = unit->buffs;
     for (int i = 0; i < buffs.size(); ++i) {
@@ -859,19 +884,17 @@ void Commander::attack() {
 
 
 void Commander::buyNewHero() {    // toedit 主要策略点
-    /*
-     * 出新英雄顺序是:H->M->B->S->M->H->B->S
-     * ??感觉出英雄顺序影响难以评估
-     * ??一有机会就买英雄?
-     */
     int new_i = BUY_RANK % 10 - 1;
+    int cost = buyNewCost(new_i);
 
-    Pos faster(MILITARY_BASE_POS[CAMP].x + BUY_NEW_HERO_RANGE - 1,
-               MILITARY_BASE_POS[CAMP].y + BUY_NEW_HERO_RANGE - 1);    // 更接近战场
-
-    if (new_i >= 0 && new_i < 4 && HERO_COST[new_i] < Economy * BUY_NEW_COST) {
+    if (new_i >= 0 && new_i < 4 && buyNewCost(new_i) < Economy) {
         console->chooseHero(HERO_NAME[new_i]);
         BUY_RANK /= 10;
+#ifdef LOG
+        logger << ">> I did buy it!" << endl;
+        logger << ">> index = " << new_i << endl;
+        logger << ">> cost = " << cost << endl;
+#endif
     }
 }
 
@@ -885,6 +908,7 @@ void Commander::levelUp() {  // toedit 主要策略点
     // 只有靠近的单位才能升级
     UnitFilter filter;
     filter.setAreaFilter(new Circle(base->pos, LEVELUP_RANGE), "a");
+    filter.setLevelFilter(0, 6);
     vector<PUnit *> nearHeroes = console->friendlyUnits(filter);
 
     if (nearHeroes.size() == 0) {
@@ -921,6 +945,19 @@ void Commander::buyLife() {
 }
 
 
+void Commander::spendMoney() {
+    // todo 还没有加买活,还没有写鲁棒
+    int n = (int) cur_friends.size();
+    if (cur_friends.size() <= 4) {
+        buyNewHero();
+    } else if (vi_enemies.size() >= n || n - fullLevelN() < 4) {    // 有满级就加一个英雄
+        buyNewHero();
+    } else {
+        levelUp();
+    }
+}
+
+
 void Commander::callBack() {
     // todo 设计成强制设置Hero的Tactic值,暂时认为快速召回没有太大意义
     // 条件判断
@@ -946,20 +983,14 @@ void Commander::RunAnalysis() {
 
 
 void Commander::TeamAct() {
-    /*
-     * 按照结算顺序排列
-     */
     // base
-    buyNewHero();
-    buyLife();
     callBack();
     attack();
+    spendMoney();
     // heroes
     for (int i = 0; i < heroes.size(); ++i) {
         heroes[i].Act();
     }
-    // hero/base
-    levelUp();
 #ifdef LOG
     printHeroList(heroes);
 #endif
@@ -1495,8 +1526,6 @@ void Hero::printAtkInfo() const {
  * 1. 集群攻击某单位(将lockhot移到Commander里面),固定的可见单位排序系统
  * 2. 逃窜的连续性
  * 3. Berserker的致命一击
-// * 4. 系统调用??
  * 5. buyLevel, buyNew
-// * 6. ?移动目标Pos的安全性问题
  * 7. 寻路:垂直逃逸
  */
