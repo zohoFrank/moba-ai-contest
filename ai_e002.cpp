@@ -3,7 +3,7 @@
 
 #include "console.h"
 //#include <fstream>
-#include <iomanip>
+//#include <iomanip>
 #include <sstream>
 #include <map>
 #include <set>
@@ -44,7 +44,7 @@ const int APPLIED_ROUND[] = {0};
 
 // Commander
 // Commander::levelUp
-static const double LEVEL_UP_COST = 0.5;    // 升级金钱比例
+static const double LEVEL_UP_COST = 1.0;    // 升级金钱比例
 // Commander::buyNewHero
 static const double BUY_NEW_COST = 1.0;     // 买新英雄花费
 
@@ -120,6 +120,8 @@ void releaseVector(vector<T *> vct);
 
 template<typename T>
 bool contain(vector<T *> vct, T *elem);
+
+bool compareLevel(PUnit *a, PUnit *b);
 
 bool operator==(const PUnit &a, const PUnit &b);
 
@@ -458,6 +460,11 @@ bool contain(vector<T *> vct, T *elem) {
 }
 
 
+bool compareLevel(PUnit *a, PUnit *b) {
+    return (a->level < b->level);
+}
+
+
 bool operator==(const PUnit &a, const PUnit &b) {
     if (
             a.typeId == b.typeId &&
@@ -676,7 +683,7 @@ Commander::~Commander() {
     releaseVector(vi_mines);
     releaseVector(vi_monsters);
     clearOldInfo(str_money);
-    clearOldInfo(str_heroes);
+//    clearOldInfo(str_heroes);
 }
 
 /**************************Helpers**************************/
@@ -900,48 +907,35 @@ void Commander::buyNewHero() {    // toedit 主要策略点
 
 void Commander::levelUp() {  // toedit 主要策略点
     /*
-     * 升级策略似乎挺复杂,制定简单原则:
-     * 1.从升级花费最少的英雄开始升级
-     * 2.每个回合升级花费不超过LEVEL_UP_COST金钱
-     * 英雄太少,免去向量排序(多次排序得不偿失),采用蛮力循环算法
+     * 制定简单原则:
+     * 1. 每回合只升级每个英雄最多一次
+     * 2. 从升级花费最少的英雄开始
      */
-    int round_cost = 0;
-    vector<PUnit *> toLevelUp;
     const int TEMP = (const int) cur_friends.size();
-    if (TEMP == 0)
+    if (TEMP == 0) {
         return;
+    }
+    // 按等级从小到大排序
+    sort(cur_friends.begin(), cur_friends.end(), compareLevel);
+    vector<PUnit *> toLevelUp;
+    int round_cost = 0;
 
-    int *flags = new int[TEMP];               // 设记号,为处理同一英雄多次升级
-
-    while (true) {
-        if (round_cost > LEVEL_UP_COST * Economy) {
-            if (!toLevelUp.empty())
-                toLevelUp.pop_back();       // 弹出,防止升级了最后的单位,却不够升级第一个最小cost单位
+    // 贪心
+    for (int i = 0; i < cur_friends.size(); ++i) {
+        if (round_cost >= LEVEL_UP_COST * Economy) {
+            if (!toLevelUp.empty()) {
+                toLevelUp.pop_back();           // 弹出,使花费严格小于标准
+            }
             break;
         }
-        PUnit *tempHero = nullptr;
-        int tempIndex = -1;             // 为flags[]方便
-        int min_cost = console->levelUpCost(HERO_LEVEL_LIMIT) + 10;     // +10是随手写的
-        // 找最小的cost
-        for (int i = 0; i < cur_friends.size(); ++i) {
-            int level = cur_friends[i]->level + flags[i];   // !!注意加上flags
-            int cost = console->levelUpCost(level);
-            if (cost < min_cost) {
-                tempHero = cur_friends[i];
-                tempIndex = i;
-                min_cost = cost;
-            }
-        }
-        // assert: tempHero是最小的cost
-        flags[tempIndex]++;             // 更新flags
-        round_cost += min_cost;         // 更新round_cost
-        toLevelUp.push_back(tempHero);  // 将单位加入待升级组中
+        round_cost += console->levelUpCost(cur_friends[i]->level);
+        toLevelUp.push_back(cur_friends[i]);
     }
+
     // 实际执行升级
     for (int j = 0; j < toLevelUp.size(); ++j) {
         console->buyHeroLevel(toLevelUp[j]);    // go 英雄买活
     }
-    delete flags;
 }
 
 
@@ -1092,16 +1086,16 @@ void Hero::lockHotUnit() {      // toedit 主要策略点,这是在[构造函数
         }
     }
 
-//    // 继承
-//    Hero *last = getStoredHero(1);
-//    if (last != nullptr) {
-//        PUnit *same_enemy = findID(my_view_en, last->hot_id);
-//        if (same_enemy != nullptr && same_enemy->hp > 0) {      // 避免不存在/死亡/召回
-//            hot = same_enemy;
-//            hot_id = same_enemy->id;
-//            return;
-//        }
-//    }
+    // 继承
+    Hero *last = getStoredHero(1);
+    if (last != nullptr) {
+        PUnit *same_enemy = findID(my_view_en, last->hot_id);
+        if (same_enemy != nullptr && same_enemy->hp > 0) {      // 避免不存在/死亡/召回
+            hot = same_enemy;
+            hot_id = same_enemy->id;
+            return;
+        }
+    }
 
     // 没有继承
     int min_sr = 1000;      // 最少存活轮数
@@ -1187,7 +1181,7 @@ bool Hero::timeToFlee() {
 /**************************Actions**************************/
 
 void Hero::cdWalk() {
-    Pos hot_p = hot->pos;               // positon of hot target
+    Pos hot_p = hot->pos;               // position of hot target
     // 撤离的距离为保持两者间距一个speed
     Pos far_p = changePos(pos, hot_p, speed, true);
     console->move(far_p, punit);        // go
@@ -1199,15 +1193,15 @@ void Hero::fastFlee() {
     if (hasBuff(punit, "WinOrDie"))
         return;
 
-//    Pos ref = nearestEnemy()->pos;
-//    // 撤离距离为尽量远离任何最近的单位
-//    if (type == 4 && punit->canUseSkill("Blink")) {     // master的闪烁
-//        Pos far_p = changePos(pos, ref, BLINK_RANGE, true);
-//        console->useSkill("Blink", far_p, punit);       // go
-//    } else {
-//        Pos far_p = changePos(pos, ref, speed, true);
-//        console->move(far_p, punit);                    // go
-//    }
+    Pos ref = nearestEnemy()->pos;
+    // 撤离距离为尽量远离任何最近的单位
+    if (type == 4 && punit->canUseSkill("Blink")) {     // master的闪烁
+        Pos far_p = changePos(pos, ref, BLINK_RANGE, true);
+        console->useSkill("Blink", far_p, punit);       // go
+    } else {
+        Pos far_p = changePos(pos, ref, speed, true);
+        console->move(far_p, punit);                    // go
+    }
 
     // 直接撤回老家(中途可能改主意)
     console->move(MILITARY_BASE_POS[CAMP], punit);
@@ -1477,4 +1471,6 @@ void Hero::StoreMe() {
  * 2. 逃窜的连续性
  * 3. Berserker的致命一击
  * 4. 系统调用??
+ * 5. buyLevel
+ * 6. ?移动目标Pos的安全性问题
  */
