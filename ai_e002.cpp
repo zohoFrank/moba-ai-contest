@@ -52,8 +52,7 @@ static const int APPLIED_ROUND[] = {0};
 // Commander::levelUp
 static const double LEVEL_UP_COST = 0.6;    // 升级金钱比例
 // Commander::buyNewHero
-static const double BUY_NEW_COST = 1.0;     // 买新英雄花费
-static int BUY_RANK = 43124132;             // 请参考hero_name
+static int BUY_RANK = 42314132;             // 请参考hero_name
 
 // Commander::callBack()
 static const int BACK_BASE = 2;             // 面对多少敌人,基地召回我方英雄
@@ -66,12 +65,10 @@ static const int CLEAN_NUMS = 2;            // 超过最多保留记录后,一�
 // Hero::judgeState()
 static const double HP_ALERT = 0.2;         // 血量预警百分比
 // Hero::near_u
-static const int HOLD_RANGE = 144;        // 支援范围常数
+static const int HOLD_RANGE = 400;        // 支援范围常数
 
 // unchanged values (during the entire game)
 static int CAMP = -1;                       // which camp
-
-static map<int, Tactic> TacLib;
 
 /************************************************************
  * Real-time sharing values
@@ -97,7 +94,6 @@ vector<PUnit *> vi_monsters;                    // 可见野怪
  ************************************************************/
 static vector<int> str_money;                   // 储存的金钱
 static vector<vector<Hero>> str_heroes;         // 储存的英雄
-static vector<TacticRound> GamePlans;           // 计划执行的战术
 
 
 /*################# Assistant functions ####################*/
@@ -142,7 +138,6 @@ void clearOldInfo(vector<T> &vct);                  // 及时清理陈旧储存�
 
 
 // ============== Game and Units ===================
-void makeTactic();                                  // 在第0轮调用一下
 int enemyCamp();                                    // 敌人的camp
 
 // Unit
@@ -150,7 +145,7 @@ int buyNewCost(int cost_indx);                      // 当前购买新英雄成�
 bool hasBuff(PUnit *unit, const char *buff);        // 是否有某buff
 bool justBeAttacked(PUnit *test);
 
-int surviveRounds(PUnit *host, PUnit *guest);       // 计算存活轮数,如果host强,返回guest存活,负整数;否则,返回host存活,正整数
+double surviveRounds(PUnit *host, PUnit *guest);    // 计算存活轮数差:host - guest
 PUnit *findID(vector<PUnit *> units, int _id);
 
 int teamAtk(vector<PUnit *> vct);
@@ -219,7 +214,7 @@ public:
 
     PUnit *hot;
     // shared units vectors
-    vector<PUnit *> my_view_en;                 // 视野范围内的敌人
+    vector<PUnit *> battle_field_en;                 // 视野范围内的敌人
 
     /*************************Setters**************************/
     PUnit *nearestEnemy() const;
@@ -277,7 +272,6 @@ void player_ai(const PMap &map, const PPlayerInfo &info, PCommand &cmd) {
     logger << "@Economy: " << Economy << endl;
     long start = clock();
 #endif
-    makeTactic();
 
     // Create pointers
     console = new Console(map, info, cmd);
@@ -593,7 +587,7 @@ bool hasBuff(PUnit *unit, const char *buff) {
 }
 
 
-int surviveRounds(PUnit *host, PUnit *guest) {
+double surviveRounds(PUnit *host, PUnit *guest) {
     /*
      * 计算公式:
      * 技能杀伤 = 先忽略技能预估战斗轮数,然后计算保守值
@@ -602,9 +596,9 @@ int surviveRounds(PUnit *host, PUnit *guest) {
      */
     int host_hp_rcv = console->unitArg("hp", "rate", host);
     int guest_hp_rcv = console->unitArg("hp", "rate", guest);
-    int host_r = (host->hp + host_hp_rcv) / max(host->atk - guest->def, 5);
-    int guest_r = (guest->hp + guest_hp_rcv) / max(guest->atk - host->def, 5);
-    return (host_r > guest_r) ? -guest_r : host_r;
+    double host_r = 1.0 * (host->hp + host_hp_rcv) / max(host->atk - guest->def, 5);
+    double guest_r = 1.0 * (guest->hp + guest_hp_rcv) / max(guest->atk - host->def, 5);
+    return (host_r - guest_r);
 }
 
 
@@ -635,52 +629,6 @@ int teamAtk(vector<PUnit *> vct) {
         round_atk += vct[i]->atk;
     }
     return round_atk;
-}
-
-
-void makeTactic() {
-    /*
-     * 0-9 矿区
-     * 10-11 基地
-     */
-    if (Round > 0) return;
-
-    // Set Default Tactics
-    // 0-9,预留给矿区
-    for (int i = 0; i < MINE_NUM; ++i) {
-        TacLib[i] = MINE_POS[i];
-    }
-    // 10-11,预留给基地
-    for (int j = 0; j < MILITARY_BASE_NUM; ++j) {
-        TacLib[10 + j] = MILITARY_BASE_POS[j];
-    }
-
-    // Add Plans
-    int TACTIC_NUM = sizeof(TACTIC_APPLIED) / sizeof(int);
-    for (int i = 0; i < TACTIC_NUM; ++i) {
-        int r = APPLIED_ROUND[i];
-        int t_idx = TACTIC_APPLIED[i];
-
-        if (t_idx < 0 || t_idx >= TacLib.size() || r < 0 || r > GAME_ROUNDS)
-            return;
-
-        Tactic t = TacLib[t_idx];
-        GamePlans.push_back(make_pair(r, t));
-    }
-
-    // sorting
-    sort(GamePlans.begin(), GamePlans.end());
-
-#ifdef LOG
-    logger << "@Game Plans" << endl;
-    logger << left << setw(5) << "RND";
-    logger << left << setw(10) << "POS" << endl;
-    for (int k = 0; k < GamePlans.size(); ++k) {
-        logger << left << setw(5) << GamePlans[k].first;
-        string p = int2str(GamePlans[k].second.x) + "," + int2str(GamePlans[k].second.y);
-        logger << left << setw(10) << p << endl;
-    }
-#endif
 }
 
 
@@ -798,61 +746,12 @@ void Commander::estimateEnemies() {
 /*************************Tactics**************************/
 
 void Commander::analyzeSituation() {        // todo
-    /*
-     * 主要责任:
-     * 分析局势,并修改或增加战术池中的战术
-     * *暂时先完成近距离协作机制
-     */
 
 }
 
 
 void Commander::tacticArrange() {
-    /*
-     * 主要责任:
-     * 并不理会战术是否合理,直接根据战术池分配任务
-     * 同一任务只分配一次,剩余的由Hero在构造时,自行完成对上一轮数据的继承
-     */
-    // 选出该执行的战术,GamePlans已排序,越靠后Round越小
-    vector<TacticRound> store;
-    while (true) {
-        if (GamePlans.empty()) break;
-
-        TacticRound tr = GamePlans.back();
-        if (tr.first == Round) {
-            store.push_back(tr);
-            GamePlans.pop_back();
-        } else {
-            while (GamePlans.back().first < Round)
-                GamePlans.pop_back();       // 防止万一,除去多余plans
-            break;
-        }
-    }
-
-    // 近距离支援
-    for (int j = 0; j < heroes.size(); ++j) {
-        if (heroes[j].hot != nullptr) return;           // 有打击目标则不支援
-        Hero h = heroes[j];
-        for (int i = 0; i < backup.size(); ++i) {
-            Pos bk = backup[i];
-            if (dis2(h.pos, bk) <= HOLD_RANGE) {
-                h.setTarget(bk);
-            }
-        }
-    }
-
-    // 战术安排
-    if (store.empty()) return;              // 如果没有要执行的战术,不改变
-
-    int n = 0;
-    // 所有人全部重新分配
-    for (int i = 0; i < heroes.size(); ++i) {       // 循环安排
-        heroes[i].setTarget(store[n].second);
-#ifdef LOG
-        logger << "$" << heroes[i].id << " is ordered to do task " << n << endl;
-#endif
-        n = (int) (++n % store.size());
-    }
+    // todo
 }
 
 
@@ -883,8 +782,13 @@ void Commander::buyNewHero() {    // toedit 主要策略点
     int new_i = BUY_RANK % 10 - 1;
     int cost = buyNewCost(new_i);
 
-    if (new_i >= 0 && new_i < 4 && buyNewCost(new_i) < Economy) {
+    if (new_i >= 0 && new_i < 4 && cost < Economy) {
         console->chooseHero(HERO_NAME[new_i]);
+#ifdef LOG
+        logger << "@buy new hero" << endl;
+        logger << ">> new_i=" << new_i << endl;
+        logger << ">> buy rank = " << BUY_RANK << endl;
+#endif
         BUY_RANK /= 10;
     }
 }
@@ -1041,16 +945,11 @@ void Hero::lockHotUnit() {      // toedit 主要策略点
      * @优先级:
      * WinOrDie
      * WaitRevive
-     * Dizzy
      * 最弱单位
-     * @小心:
-     * 上一回合的热点单位死亡或召回
-     * 被卡住了无法攻击
-     * 追击了一段时间即停止
      */
     // fixme 有问题
 
-    if (my_view_en.size() == 0) {
+    if (battle_field_en.size() == 0) {
         hot = nullptr;
         hot_id = -1;
         return;
@@ -1058,11 +957,10 @@ void Hero::lockHotUnit() {      // toedit 主要策略点
 
     vector<PUnit *> win_or_die;
     vector<PUnit *> wait_revive;
-    vector<PUnit *> dizzy;
 
     // 特殊buff
-    for (int i = 0; i < my_view_en.size(); ++i) {
-        PUnit *en = my_view_en[i];
+    for (int i = 0; i < battle_field_en.size(); ++i) {
+        PUnit *en = battle_field_en[i];
         // WinOrDie
         if (hasBuff(en, "WinOrDie")) {
             win_or_die.push_back(en);
@@ -1070,10 +968,6 @@ void Hero::lockHotUnit() {      // toedit 主要策略点
         // WaitRevive
         if (hasBuff(en, "WaitRevive")) {
             wait_revive.push_back(en);
-        }
-        // Dizzy
-        if (hasBuff(en, "Dizzy")) {
-            dizzy.push_back(en);
         }
     }
 
@@ -1087,23 +981,21 @@ void Hero::lockHotUnit() {      // toedit 主要策略点
         hot_id = hot->id;
         return;
     }
-    if (!dizzy.empty()) {
-        hot = dizzy[0];
-        hot_id = hot->id;
-        return;
-    }
 
 
-    // 寻找血量最低单位
-    int min_hp = 20000;
+    // 寻找最弱单位
     int index = -1;
-    for (int j = 0; j < my_view_en.size(); ++j) {
-        if (my_view_en[j]->hp < min_hp) {
-            min_hp = my_view_en[j]->hp;
+    double max = -1 << 30;
+    for (int j = 0; j < battle_field_en.size(); ++j) {
+        PUnit *en = battle_field_en[j];
+        double surv = surviveRounds(punit, en);
+        if (surv > max) {
             index = j;
+            max = surv;
         }
-    }   // assert: my_view_en not empty
-    hot = my_view_en[index];
+    }   // assert: battle_field_en not empty
+
+    hot = battle_field_en[index];
     hot_id = hot->id;
 }
 
@@ -1235,17 +1127,21 @@ void Hero::hammerguardAttack() {
         }
 
         // 没有优质攻击目标
-        console->useSkill("HammerAttack", hot, punit);  // go
+        if (dis2(pos, hot->pos) < HAMMERATTACK_RANGE) {
+            console->useSkill("HammerAttack", hot, punit);  // go
 #ifdef LOG
-        logger << "[skill] HammerAttack at:";
-        printAtkInfo();
+            logger << "[skill] HammerAttack at:";
+            printAtkInfo();
 #endif
-    } else {
-        console->attack(hot, punit);                    // go
-#ifdef LOG
-        printAtkInfo();
-#endif
+            return;
+        }
     }
+
+    // assert: 不能使用技能,或能使用但是没有可行对象
+    console->attack(hot, punit);                    // go
+#ifdef LOG
+    printAtkInfo();
+#endif
 }
 
 
@@ -1260,6 +1156,7 @@ void Hero::berserkerAttack() {      // toedit 主要策略点 - 致命一击
     // Sacrifice中
     if (punit->findBuff("WinOrDie") != nullptr && punit->canUseSkill("Attack")) {
         console->attack(hot, punit);        // go
+        return;
     }
 
     // cd中
@@ -1271,8 +1168,25 @@ void Hero::berserkerAttack() {      // toedit 主要策略点 - 致命一击
         return;
     } // assert: can attack
 
+    // 讨论环境是否安全
+    bool safe = true;
+    for (int i = 0; i < battle_field_en.size(); ++i) {
+        PUnit *en = battle_field_en[i];
+        Pos en_p = en->pos;
+        int dist2 = dis2(en_p, pos);
+        // 攻击范围内
+        if (dist2 <= en->range + en->speed && en->canUseSkill("Attack")) {
+            safe = false;
+            break;
+        }
+        if (dist2 <= HAMMERATTACK_RANGE + en->speed && en->canUseSkill("HammerAttack")) {
+            safe = false;
+            break;
+        }
+    }
+
     // 结算
-    if (punit->canUseSkill("Sacrifice") && punit->canUseSkill("Attack")) {
+    if (safe && punit->canUseSkill("Sacrifice") && punit->canUseSkill("Attack")) {
         console->useSkill("Sacrifice", hot, punit);     // go
 #ifdef LOG
         logger << "[skill] Sacrifce" << endl;
@@ -1319,7 +1233,7 @@ void Hero::scouterAttack() {
 
 
 void Hero::contactAttack() {
-    // attack
+    // attack enemies
     switch (type) {
         case 3:
             hammerguardAttack();
@@ -1377,7 +1291,7 @@ void Hero::setPtr(PUnit *unit) {
     // 读取记录
     Hero *last = getStoredHero(1);
     if (last == nullptr) {
-        target = TacLib[0];
+        target = MINE_POS[0];
         hot_id = -1;
     } else {
         target = last->target;
@@ -1390,9 +1304,10 @@ void Hero::setUnits() {
     // fixme 野怪,除去observer
     UnitFilter filter;
     filter.setAreaFilter(new Circle(punit->pos, punit->view), "a");
-    filter.setCampFilter(enemyCamp());
+    filter.setAreaFilter(new Circle(target, HOLD_RANGE), "w");
     filter.setAvoidFilter("Observer", "a");
-    my_view_en = console->enemyUnits(filter);
+    filter.setCampFilter(enemyCamp());
+    battle_field_en = console->enemyUnits(filter);
 }
 
 
@@ -1405,7 +1320,7 @@ Hero::Hero(PUnit *hero) {
 
 
 Hero::~Hero() {
-    my_view_en.clear();
+    battle_field_en.clear();
     punit = nullptr;
     hot = nullptr;
 }
