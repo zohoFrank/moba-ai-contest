@@ -115,8 +115,8 @@ void printString(vector<T> vct);      // T重载了<<
 
 // =============== Basic Algorithms ================
 // Path finding
-Pos parallelChangePos(const Pos &origin, const Pos &reference, double len, bool away = true);  // 详见实现
-Pos verticalChangePos(const Pos &origin, const Pos &reference, double len, bool clockwize = true);  //详见实现
+Pos parallelChangePos(const Pos &origin, const Pos &reference, int len2, bool away = true);  // 详见实现
+Pos verticalChangePos(const Pos &origin, const Pos &reference, int len2, bool clockwize = true);  //详见实现
 
 // String and int transfer
 int str2int(string str);
@@ -216,7 +216,6 @@ public:
     int round;                                  // 便于区分
     Tactic target;                              // 战术
     int hot_id;                                 // 便于储存
-    bool lock_hot;                              // 锁定hot
 
     PUnit *hot;
     // shared units vectors
@@ -419,7 +418,7 @@ void printString(vector<T> vct) {
 Pos parallelChangePos(
         const Pos &origin,
         const Pos &reference,
-        double len,
+        int len2,
         bool away
 ) {
     /*
@@ -429,6 +428,7 @@ Pos parallelChangePos(
      * double len - 要移动的距离
      * bool away - true为原理参考点,false为接近参考点
      */
+    double len = sqrt(len2 * 1.0);
     double dist = dis(origin, reference);
     // 正方向单位向量
     double unit_x = 1.0 * (reference.x - origin.x) / dist;
@@ -456,13 +456,14 @@ Pos parallelChangePos(
 Pos verticalChangePos(
         const Pos &origin,
         const Pos &reference,
-        double len,
+        int len2,
         bool clockwize
 ) {
+    double len = sqrt(len2 * 1.0);
     Pos ref = reference - origin;
     // 求单位法线向量,先假设是顺时针
     Pos vref(ref.y, -ref.x);        // 与ref垂直成90°
-    double len_vref = dis(vref, Pos(0, 0));
+    double len_vref = dis2(vref, Pos(0, 0));
     // vref方向的单位向量
     double vx = 1.0 * vref.x / len_vref;
     double vy = 1.0 * vref.y / len_vref;
@@ -834,7 +835,7 @@ void Commander::tacticArrange() {
         Hero h = heroes[j];
         for (int i = 0; i < backup.size(); ++i) {
             Pos bk = backup[i];
-            if (dis(h.pos, bk) <= HOLD_RANGE) {
+            if (dis2(h.pos, bk) <= HOLD_RANGE) {
                 h.setTarget(bk);
             }
         }
@@ -1004,12 +1005,12 @@ PUnit *Hero::nearestEnemy() const {
     if (vi_enemies.size() == 0)
         return nullptr;
 
-    double min_dist = MAP_SIZE * 1.0;
+    int min_dist = MAP_SIZE * MAP_SIZE;
     PUnit *selected = nullptr;
 
     for (int i = 0; i < vi_enemies.size(); ++i) {
         PUnit *it = vi_enemies[i];
-        double dist = dis(it->pos, pos);
+        int dist = dis2(it->pos, pos);
         if (dist < min_dist) {
             selected = it;
             min_dist = dist;
@@ -1048,12 +1049,6 @@ void Hero::lockHotUnit() {      // toedit 主要策略点
      * 追击了一段时间即停止
      */
     // fixme 有问题
-
-    // 如果锁定则继承
-    if (lock_hot) {
-        hot = findID(vi_enemies, hot_id);
-        return;
-    }
 
     if (my_view_en.size() == 0) {
         hot = nullptr;
@@ -1168,7 +1163,7 @@ void Hero::fastFlee() {
     Pos ref = nearestEnemy()->pos;
     // 撤离距离为尽量远离任何最近的单位
     if (type == 4 && punit->canUseSkill("Blink")) {     // master的闪烁
-        Pos far_p = parallelChangePos(pos, ref, BLINK_RANGE - 10, true);
+        Pos far_p = parallelChangePos(pos, ref, BLINK_RANGE, true);
         console->useSkill("Blink", far_p, punit);       // go
 #ifdef LOG
         logger << "[skill] Blink from ";
@@ -1189,8 +1184,8 @@ void Hero::justMove() {
     if (type == 6 && punit->canUseSkill("SetObserver")) {
         // 如果离关键点比较近,那么插眼 fixme 有眼就不插了
         Pos set = MINE_POS[0];
-        double dist = dis(set, pos);
-        if (dist < SET_OBSERVER_RANGE / 4) {
+        int dist = dis2(set, pos);
+        if (dist < SET_OBSERVER_RANGE) {
             console->useSkill("SetObserver", set, punit);   // go
 #ifdef LOG
             logger << "[skill] SetObserver at pos=";
@@ -1220,9 +1215,8 @@ void Hero::hammerguardAttack() {
     }
 
     // 攻击
-    if (punit->canUseSkill("HammerAttack") && dis(hot->pos, pos) < HAMMERATTACK_RANGE) {
+    if (punit->canUseSkill("HammerAttack") && dis2(hot->pos, pos) < HAMMERATTACK_RANGE) {
         console->useSkill("HammerAttack", hot, punit);  // go
-        lock_hot = true;
 #ifdef LOG
         logger << "[skill] HammerAttack at:";
         printAtkInfo();
@@ -1279,7 +1273,7 @@ void Hero::masterAttack() {
      * 1.与该单位的距离(range, range + blink_range]
      * 2.该单位一击便歹
      */
-    double dist = dis(hot->pos, pos);
+    int dist = dis2(hot->pos, pos);
     if (dist > range && dist <= range + BLINK_RANGE && hot->hp < atk) {
         Pos chase_p = parallelChangePos(pos, hot->pos, dist - range / 2, false);
         console->useSkill("Blink", chase_p, punit);     // go
@@ -1371,7 +1365,6 @@ void Hero::setPtr(PUnit *unit) {
     } else {
         target = last->target;
         hot_id = last->hot_id;
-        lock_hot = last->lock_hot;
     }
 }
 
@@ -1423,7 +1416,7 @@ void Hero::HeroAct() {
     }
 
     // 不得离开目标矿太远
-    if (dis(target, pos) > view || hot == nullptr) {
+    if (dis2(target, pos) > view || hot == nullptr) {
         justMove();
         return;
     } else {
@@ -1460,7 +1453,7 @@ void Hero::StoreMe() {
 void Hero::printAtkInfo() const {
     logger << "[atk] ";
     logger << hot->name << "(" << hot->id << ") ";
-    logger << "dist = " << dis(hot->pos, pos) << endl;
+    logger << "dist = " << dis2(hot->pos, pos) << endl;
 }
 
 #endif
