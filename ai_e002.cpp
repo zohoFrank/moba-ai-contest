@@ -45,8 +45,8 @@ static const char *HERO_NAME[] = {"Hammerguard", "Master", "Berserker", "Scouter
 /************************************************************
  * Policy const values
  ************************************************************/
-const int TACTIC_APPLIED[] = {0};
-const int APPLIED_ROUND[] = {0};
+static const int TACTIC_APPLIED[] = {6};
+static const int APPLIED_ROUND[] = {0};
 
 // Commander
 // Commander::levelUp
@@ -66,7 +66,7 @@ static const int CLEAN_NUMS = 2;            // 超过最多保留记录后,一�
 // Hero::judgeState()
 static const double HP_ALERT = 0.2;         // 血量预警百分比
 // Hero::near_u
-static const double BACKUP_RANGE = 300;     // 支援范围常数
+static const int HOLD_RANGE = 200;        // 支援范围常数
 
 // unchanged values (during the entire game)
 static int CAMP = -1;                       // which camp
@@ -116,7 +116,7 @@ void printString(vector<T> vct);      // T重载了<<
 // =============== Basic Algorithms ================
 // Path finding
 Pos parallelChangePos(const Pos &origin, const Pos &reference, double len, bool away = true);  // 详见实现
-Pos verticalChangePos(const Pos &origin, const Pos &reference, double len ,bool clockwize = true);  //详见实现
+Pos verticalChangePos(const Pos &origin, const Pos &reference, double len, bool clockwize = true);  //详见实现
 Pos nearestKP(Pos pos);                             // 最近的关键点编号,包括各个矿和自定义的关键点
 
 // String and int transfer
@@ -132,8 +132,6 @@ template<typename T>
 bool contain(vector<T *> vct, T *elem);
 
 bool compareLevel(PUnit *a, PUnit *b);
-
-bool operator==(const PUnit &a, const PUnit &b);
 
 bool operator<(const Pos &a, const Pos &b);
 
@@ -225,7 +223,6 @@ public:
     vector<PUnit *> my_view_en;                 // 视野范围内的敌人
 
     /*************************Setters**************************/
-    PUnit *nearestEnemy(vector<PUnit *> &ignore) const;         // 视野范围内最近的敌人
     PUnit *nearestEnemy() const;
 
     // setter
@@ -233,14 +230,13 @@ public:
     void lockHotUnit();                         // 锁定攻击目标
 
     /*************************Helpers***************************/
-    vector<PUnit *> whoHitMe();                  // 返回攻击自己的单位
     bool timeToFlee();                          // 是否应该逃窜
+    bool stuck();                               // 由于未知原因卡住了
 
     /**************************Actions**************************/
     // 仅move
     void cdWalk();                              // cd间的躲避步伐
     void fastFlee();                            // 快速逃窜步伐
-    void stepBackwards();                       // 远程单位被攻击后撤
     void justMove();                            // 前往目标
 
     // 仅attack
@@ -268,10 +264,9 @@ public:
     // LOADER
     void HeroAct();         // 调用一切动作接口
     void StoreMe();     // 储存该英雄信息
+
 #ifdef LOG
-
     void printAtkInfo() const;
-
 #endif
 };
 
@@ -458,6 +453,32 @@ Pos parallelChangePos(
 }
 
 
+Pos verticalChangePos(
+        const Pos &origin,
+        const Pos &reference,
+        double len,
+        bool clockwize
+) {
+    Pos ref = reference - origin;
+    // 求单位法线向量,先假设是顺时针
+    Pos vref(ref.y, -ref.x);        // 与ref垂直成90°
+    double len_vref = dis(vref, Pos(0, 0));
+    // vref方向的单位向量
+    double vx = 1.0 * vref.x / len_vref;
+    double vy = 1.0 * vref.y / len_vref;
+
+    // 移动
+    Pos far_p;
+    far_p.x = (int) (len * vx + origin.x);
+    far_p.y = (int) (len * vy + origin.y);
+
+#ifdef LOG
+    logger << "#verticalChangePos() : " << endl;
+    logger << origin << reference << len << far_p << endl;
+#endif
+    return far_p;
+}
+
 Pos nearestKP(Pos pos) {
     int mine_i = -1;
     double mine_dis = MAP_SIZE;
@@ -468,17 +489,18 @@ Pos nearestKP(Pos pos) {
             mine_i = j;
         }
     }
+
     int kp_i = -1;
     double kp_dis = MAP_SIZE;
     for (int i = 0; i < KEY_POINTS_NUM; ++i) {
         double dist = dis(KEY_POINTS[i], pos);
-        if (dist < mine_dis) {
+        if (dist < kp_dis) {
             kp_dis = dist;
             kp_i = i;
         }
     }
 
-    return (mine_dis < kp_dis) ? (MINE_POS[mine_i]) : (KEY_POINTS[kp_i]);
+    return (mine_dis <= kp_dis) ? (MINE_POS[mine_i]) : (KEY_POINTS[kp_i]);
 }
 
 
@@ -492,9 +514,9 @@ int enemyCamp() {
 // data structure related
 template<typename T>
 bool contain(vector<T *> vct, T *elem) {
-//    return binary_search(vct.begin(), vct.end(), elem); 英雄太少没必要
+    // 只能针对PUnit *使用
     for (int i = 0; i < vct.size(); ++i) {
-        if (*vct[i] == *elem) {
+        if (vct[i] == elem) {
             return true;
         }
     }
@@ -504,20 +526,6 @@ bool contain(vector<T *> vct, T *elem) {
 
 bool compareLevel(PUnit *a, PUnit *b) {
     return (a->level < b->level);
-}
-
-
-bool operator==(const PUnit &a, const PUnit &b) {
-    if (
-            a.typeId == b.typeId &&
-            a.id == b.id &&
-            a.exp == b.exp &&
-            a.hp == b.hp &&
-            a.mp == b.mp
-            )
-        return true;
-    else
-        return false;
 }
 
 
@@ -850,7 +858,7 @@ void Commander::tacticArrange() {
         Hero h = heroes[j];
         for (int i = 0; i < backup.size(); ++i) {
             Pos bk = backup[i];
-            if (dis(h.pos, bk) <= BACKUP_RANGE) {
+            if (dis(h.pos, bk) <= HOLD_RANGE) {
                 h.setTarget(bk);
             }
         }
@@ -1015,10 +1023,7 @@ void Commander::StoreAndClean() {
 
 /*************************Setters**************************/
 
-PUnit *Hero::nearestEnemy(vector<PUnit *> &ignore) const {
-    /*
-     * 除矿以外一切可攻击单位,可以在ignore中指定被忽略的对象
-     */
+PUnit *Hero::nearestEnemy() const {
     // 可攻击对象不存在
     if (vi_enemies.size() == 0)
         return nullptr;
@@ -1029,19 +1034,12 @@ PUnit *Hero::nearestEnemy(vector<PUnit *> &ignore) const {
     for (int i = 0; i < vi_enemies.size(); ++i) {
         PUnit *it = vi_enemies[i];
         double dist = dis(it->pos, pos);
-        if (dist < min_dist && !contain(ignore, it)) {
+        if (dist < min_dist) {
             selected = it;
             min_dist = dist;
         }
     }
     return selected;
-}
-
-
-PUnit *Hero::nearestEnemy() const {
-    vector<PUnit *> empty;
-    empty.clear();
-    return nearestEnemy(empty);
 }
 
 
@@ -1061,86 +1059,86 @@ Hero *Hero::getStoredHero(int prev_n) {
 }
 
 
-void Hero::lockHotUnit() {      // toedit 主要策略点,这是在[构造函数]阶段进行的,在Commander里属于makeHeroes()
+void Hero::lockHotUnit() {      // toedit 主要策略点
     /*
      * @优先级:
      * WinOrDie
      * WaitRevive
-     * 继承上一轮
+     * Dizzy
      * 最弱单位
      * @小心:
      * 上一回合的热点单位死亡或召回
      * 被卡住了无法攻击
      * 追击了一段时间即停止
      */
-    if (vi_enemies.size() == 0) {
+    // fixme 有问题
+
+    UnitFilter filter;
+    filter.setAreaFilter(new Circle(target, HOLD_RANGE), "a");
+    filter.setAvoidFilter("MilitaryBase", "a");
+    filter.setAvoidFilter("Observer", "w");
+    vector<PUnit *> near_en = console->enemyUnits(filter);
+
+    // 筛选两个回合能到的地方
+    if (near_en.size() == 0) {
         hot = nullptr;
         hot_id = -1;
         return;
     }
 
+    vector<PUnit *> win_or_die;
+    vector<PUnit *> wait_revive;
+    vector<PUnit *> dizzy;
+
     // 特殊buff
-    for (int i = 0; i < vi_enemies.size(); ++i) {
-        PUnit *en = vi_enemies[i];
+    for (int i = 0; i < near_en.size(); ++i) {
+        PUnit *en = near_en[i];
         // WinOrDie
         if (hasBuff(en, "WinOrDie")) {
-            hot = en;
-            hot_id = en->id;
-            return;
+            win_or_die.push_back(en);
         }
         // WaitRevive
         if (hasBuff(en, "WaitRevive")) {
-            hot = en;
-            hot_id = en->id;
-            return;
+            wait_revive.push_back(en);
+        }
+        // Dizzy
+        if (hasBuff(en, "Dizzy")) {
+            dizzy.push_back(en);
         }
     }
 
-//    // 继承
-//    Hero *last = getStoredHero(1);
-//    if (last != nullptr) {
-//        PUnit *same_enemy = findID(vi_enemies, last->hot_id);
-//        if (same_enemy != nullptr && same_enemy->hp > 0) {      // 避免不存在/死亡/召回
-//            hot = same_enemy;
-//            hot_id = same_enemy->id;
-//            return;
-//        }
-//    }
+    if (!win_or_die.empty()) {
+        hot = win_or_die[0];
+        hot_id = hot->id;
+        return;
+    }
+    if (!wait_revive.empty()) {
+        hot = wait_revive[0];
+        hot_id = hot->id;
+        return;
+    }
+    if (!dizzy.empty()) {
+        hot = dizzy[0];
+        hot_id = hot->id;
+        return;
+    }
 
-    // 没有继承,寻找血量最低单位
+
+    // 继承,寻找血量最低单位
     int min_hp = 20000;
     int index = -1;
-    for (int j = 0; j < vi_enemies.size(); ++j) {
-        if (vi_enemies[j]->hp < min_hp) {
-            min_hp = vi_enemies[j]->hp;
+    for (int j = 0; j < near_en.size(); ++j) {
+        if (near_en[j]->hp < min_hp) {
+            min_hp = near_en[j]->hp;
             index = j;
         }
-    }   // assert: vi_enemies not empty
-    hot = vi_enemies[index];
+    }   // assert: near_en not empty
+    hot = near_en[index];
     hot_id = hot->id;
 }
 
 
 /**************************Helpers**************************/
-
-vector<PUnit *> Hero::whoHitMe() {
-    /*
-     * 只计算这一回合和上一回合遭遇的攻击
-     */
-    vector<PUnit *> hitters;
-    if (Round < 1) return hitters;
-
-    // 遍历,依次考察lastHit接口
-    for (int i = 0; i < vi_enemies.size(); ++i) {
-        int en_id = vi_enemies[i]->id;
-        int last_hit = console->unitArg("lastHit", int2str(en_id), punit);
-        if (Round - last_hit <= 1) {
-            hitters.push_back(vi_enemies[i]);
-        }
-    }
-    return hitters;
-}
-
 
 bool Hero::timeToFlee() {
     // 防止berserker误判
@@ -1161,14 +1159,19 @@ bool Hero::timeToFlee() {
     // 血量过低
     if (hp < HP_ALERT * punit->max_hp) {
         return true;
-    } else {
-        // 对方过强,一般不会
-        vector<PUnit *> hitters = whoHitMe();
-        if (teamAtk(hitters) - def > hp)
-            return true;
     }
 
     return false;
+}
+
+
+bool Hero::stuck() {
+    Hero *last = getStoredHero(1);
+    Hero *last2 = getStoredHero(2);
+    if (last == nullptr || last2 == nullptr)
+        return false;
+    else
+        return (last->pos == pos && last2->pos == pos);
 }
 
 
@@ -1181,7 +1184,7 @@ void Hero::cdWalk() {       // toedit 主要策略点
 
     Pos ref_p = nearestEnemy()->pos;               // position of reference
     // 撤离的距离为保持两者间距一个speed
-    Pos far_p = parallelChangePos(pos, ref_p, speed, true);
+    Pos far_p = verticalChangePos(pos, ref_p, speed, true);
     console->move(far_p, punit);        // go
 }
 
@@ -1208,31 +1211,6 @@ void Hero::fastFlee() {
 #ifdef LOG
         logger << "[move] flee to ";
         logger << far_p << endl;
-#endif
-    }
-}
-
-
-void Hero::stepBackwards() {
-    if (justBeAttacked(punit)) {
-        vector<PUnit *> hitters = whoHitMe();
-        Pos sum(0, 0);
-        for (int i = 0; i < hitters.size(); ++i) {
-            Pos p = hitters[i]->pos;
-            sum = sum + parallelChangePos(pos, p, range - dis(p, pos), true);
-        }
-        // 计算平均值
-        Pos target = sum * (1.0 / (double) hitters.size());
-        console->move(target, punit);       // go
-#ifdef  LOG
-        logger << "**[MSG] stepBackwards():" << endl;
-        logger << "**just hit by " << endl;
-        for (int j = 0; j < hitters.size(); ++j) {
-            logger << hitters[j]->pos << " ";
-        }
-        logger << endl;
-        logger << "**move to ";
-        logger << target << endl;
 #endif
     }
 }
@@ -1288,20 +1266,13 @@ void Hero::hammerguardAttack() {
 }
 
 
-void Hero::berserkerAttack() {
+void Hero::berserkerAttack() {      // toedit 主要策略点 - 致命一击
     /*
      * 使用Sacrifice的条件:
      * 1.没有AttackCd
      * 2.遍历所有敌人,应该不存在:其射程既能包含我,又没有AttackCd
      */
-    // Sacrifice中
-    if (hasBuff(punit, "WinOrDie") && punit->canUseSkill("Attack")) {
-        console->attack(hot, punit);        // go
-#ifdef LOG
-        printAtkInfo();
-#endif
-        return;
-    }
+    // fixme 目前看策略失败
 
     // cd中
     if (!punit->canUseSkill("Attack")) {
@@ -1310,22 +1281,20 @@ void Hero::berserkerAttack() {
         logger << "[move] cd walk" << endl;
 #endif
         return;
-    }
+    } // assert: can attack
 
-    // toedit 主要策略点 - 致命一击
     bool safe_env = true;
     for (int i = 0; i < my_view_en.size(); ++i) {
         PUnit *en = my_view_en[i];
         double dist = dis(pos, en->pos);
         if (en->range >= dist &&                // 在对方攻击范围内
-            contain(whoHitMe(), en) &&      // 对方最近打过我
             (en->canUseSkill("Attack") || en->canUseSkill("HammerAttack"))) {   // 对方可以使用伤害动作
             safe_env = false;
             break;
         }
     }
     // 结算
-    if (safe_env && punit->canUseSkill("Sacrifice")) {
+    if (safe_env && punit->canUseSkill("Sacrifice") && punit->canUseSkill("Sacrifice")) {
         console->useSkill("Sacrifice", hot, punit);     // go
 #ifdef LOG
         logger << "[skill] Sacrifce" << endl;
@@ -1350,8 +1319,8 @@ void Hero::masterAttack() {
         Pos chase_p = parallelChangePos(pos, hot->pos, dist - range / 2, false);
         console->useSkill("Blink", chase_p, punit);     // go
 #ifdef LOG
-        logger << "[skill] Blink pos=";
-        logger << chase_p << endl;
+        logger << "[skill] chasing by Blink";
+        logger << pos << chase_p << endl;
 #endif
     } else {
         console->attack(hot, punit);                    // go
@@ -1473,10 +1442,9 @@ void Hero::setTarget(Tactic t) {
 
 void Hero::HeroAct() {
 #ifdef LOG
+    logger << endl;
     logger << "@Act overview:" << endl;
     logger << name << "(" << id << "):" << endl;
-    logger << "Find: " << endl;
-    printUnit(my_view_en);
     logger << "Decide to: " << endl;
 #endif
     // todo
@@ -1486,9 +1454,8 @@ void Hero::HeroAct() {
         return;
     }
 
-    // 不得离开目标矿,否则会吃亏
-    Circle near_mine(target, view);
-    if (!near_mine.contain(pos) || hot == nullptr) {
+    // 不得离开目标矿太远
+    if (dis(target, pos) > view || hot == nullptr || stuck()) {
         justMove();
         return;
     } else {
@@ -1536,7 +1503,7 @@ void Hero::printAtkInfo() const {
  * 1. 集群攻击某单位(将lockhot移到Commander里面),固定的可见单位排序系统
  * 2. 逃窜的连续性
  * 3. Berserker的致命一击
- * 5. buyLevel, buyNew
+ * 5. buyLevel, buyNew, 对部分单位进行召回升级callBack, 钱过多时进行买活buyLife
  * 7. 寻路:垂直逃逸
  * 8. hot目标逃逸后,如何处理
  */
