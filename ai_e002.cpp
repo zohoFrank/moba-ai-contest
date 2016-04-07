@@ -64,7 +64,7 @@ static const int CLEAN_NUMS = 2;            // 超过最多保留记录后,一�
 
 // Hero
 // Hero::judgeState()
-static const double HP_ALERT = 0.1;         // 血量预警百分比
+static const double HP_ALERT = 0.2;         // 血量预警百分比
 // Hero::near_u
 static const double BACKUP_RANGE = 300;     // 支援范围常数
 
@@ -266,7 +266,7 @@ public:
     void setTarget(Tactic t);                   // 设置战术
 
     // LOADER
-    void Act();         // 调用一切动作接口
+    void HeroAct();         // 调用一切动作接口
     void StoreMe();     // 储存该英雄信息
 #ifdef LOG
 
@@ -459,16 +459,26 @@ Pos parallelChangePos(
 
 
 Pos nearestKP(Pos pos) {
-    int min_i = -1;
-    double min_dis = MAP_SIZE;
-    for (int i = 0; i < KEY_POINTS_NUM; ++i) {
-        double dist = dis(KEY_POINTS[i], pos);
-        if (dist < min_dis) {
-            min_dis = dist;
-            min_i = i;
+    int mine_i = -1;
+    double mine_dis = MAP_SIZE;
+    for (int j = 0; j < MINE_NUM; ++j) {
+        double dist = dis(MINE_POS[j], pos);
+        if (dist < mine_dis) {
+            mine_dis = dist;
+            mine_i = j;
         }
     }
-    return KEY_POINTS[min_i];
+    int kp_i = -1;
+    double kp_dis = MAP_SIZE;
+    for (int i = 0; i < KEY_POINTS_NUM; ++i) {
+        double dist = dis(KEY_POINTS[i], pos);
+        if (dist < mine_dis) {
+            kp_dis = dist;
+            kp_i = i;
+        }
+    }
+
+    return (mine_dis < kp_dis) ? (MINE_POS[mine_i]) : (KEY_POINTS[kp_i]);
 }
 
 
@@ -982,7 +992,7 @@ void Commander::TeamAct() {
     spendMoney();
     // heroes
     for (int i = 0; i < heroes.size(); ++i) {
-        heroes[i].Act();
+        heroes[i].HeroAct();
     }
 #ifdef LOG
     printHeroList(heroes);
@@ -1177,22 +1187,28 @@ void Hero::cdWalk() {       // toedit 主要策略点
 
 
 void Hero::fastFlee() {
-    // 忽略Sacrifice技能
-    if (hasBuff(punit, "WinOrDie"))
-        return;
-
     PUnit *nearest = nearestEnemy();
-    if (nearest == nullptr)
+    if (nearest == nullptr) {
+        console->move(MINE_POS[CAMP], punit);           // go
         return;
+    }
 
     Pos ref = nearestEnemy()->pos;
     // 撤离距离为尽量远离任何最近的单位
     if (type == 4 && punit->canUseSkill("Blink")) {     // master的闪烁
         Pos far_p = parallelChangePos(pos, ref, BLINK_RANGE - 10, true);
         console->useSkill("Blink", far_p, punit);       // go
+#ifdef LOG
+        logger << "[skill] Blink from ";
+        logger << pos << " to " << far_p << endl;
+#endif
     } else {
         Pos far_p = parallelChangePos(pos, ref, speed, true);
         console->move(far_p, punit);                    // go
+#ifdef LOG
+        logger << "[move] flee to ";
+        logger << far_p << endl;
+#endif
     }
 }
 
@@ -1356,9 +1372,6 @@ void Hero::scouterAttack() {
 
 
 void Hero::contactAttack() {
-#ifdef LOG
-        logger << "[move] fast flee" << endl;
-#endif
     // attack
     switch (type) {
         case 3:
@@ -1458,7 +1471,7 @@ void Hero::setTarget(Tactic t) {
 }
 
 
-void Hero::Act() {
+void Hero::HeroAct() {
 #ifdef LOG
     logger << "@Act overview:" << endl;
     logger << name << "(" << id << "):" << endl;
