@@ -1148,7 +1148,7 @@ void Hero::cdWalk() {       // toedit 主要策略点
 
     Pos ref_p = nearestEnemy()->pos;               // position of reference
     // 撤离的距离为保持两者间距一个speed
-    Pos far_p = verticalChangePos(pos, ref_p, speed, true);
+    Pos far_p = parallelChangePos(pos, ref_p, speed, true);
     console->move(far_p, punit);        // go
 }
 
@@ -1215,7 +1215,26 @@ void Hero::hammerguardAttack() {
     }
 
     // 攻击
-    if (punit->canUseSkill("HammerAttack") && dis2(hot->pos, pos) < HAMMERATTACK_RANGE) {
+    if (punit->canUseSkill("HammerAttack")) {
+        // 选择攻击英雄
+        UnitFilter filter;
+        filter.setAreaFilter(new Circle(pos, HAMMERATTACK_RANGE), "a");
+        filter.setCampFilter(enemyCamp());
+        filter.setAvoidFilter("Observer", "a");
+        vector<PUnit *> to_hit = console->enemyUnits(filter);
+
+        for (int i = 0; i < to_hit.size(); ++i) {
+            if (to_hit[i]->findBuff("WinOrDie")) {
+                console->useSkill("HammerAttack", to_hit[i], punit);
+#ifdef LOG
+                logger << "[skill] HammerAttack at:";
+                printAtkInfo();
+#endif
+                return;
+            }
+        }
+
+        // 没有优质攻击目标
         console->useSkill("HammerAttack", hot, punit);  // go
 #ifdef LOG
         logger << "[skill] HammerAttack at:";
@@ -1338,7 +1357,6 @@ void Hero::setPtr(PUnit *unit) {
         range = 0;
         hot = nullptr;
         hot_id = -1;
-        lock_hot = false;
         return;
     }
 
@@ -1361,7 +1379,6 @@ void Hero::setPtr(PUnit *unit) {
     if (last == nullptr) {
         target = TacLib[0];
         hot_id = -1;
-        lock_hot = false;
     } else {
         target = last->target;
         hot_id = last->hot_id;
