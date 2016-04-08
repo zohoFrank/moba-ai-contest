@@ -53,7 +53,9 @@ static const int APPLIED_ROUND[] = {0};
 static const double LEVEL_UP_COST = 0.6;    // 升级金钱比例
 // Commander::buyNewHero
 static int BUY_RANK = 42314132;             // 请参考hero_name
-
+// Commander::analyzeSitu
+static int KILLS = 0;                       // 杀敌数
+static int DEATHS = 0;                      // 死亡数
 // Commander::callBack()
 static const int BACK_BASE = 2;             // 面对多少敌人,基地召回我方英雄
 
@@ -62,10 +64,8 @@ static const int CLEAN_LIMIT = 6;           // 最多保留回合记录
 static const int CLEAN_NUMS = 2;            // 超过最多保留记录后,一次清理数据组数
 
 // Hero
-// Hero::judgeState()
 static const double HP_ALERT = 0.2;         // 血量预警百分比
-// Hero::near_u
-static const int HOLD_RANGE = 400;        // 支援范围常数
+static const int BATTLE_RANGE = 625;        // 战区范围
 
 // unchanged values (during the entire game)
 static int CAMP = -1;                       // which camp
@@ -94,6 +94,8 @@ vector<PUnit *> vi_monsters;                    // 可见野怪
  ************************************************************/
 static vector<int> str_money;                   // 储存的金钱
 static vector<vector<Hero>> str_heroes;         // 储存的英雄
+typedef pair<int, Tactic> CmdInfo;
+static vector<CmdInfo> str_cmd;                 // 储存hot_id和target
 
 
 /*################# Assistant functions ####################*/
@@ -145,6 +147,7 @@ int buyNewCost(int cost_indx);                      // 当前购买新英雄成�
 bool hasBuff(PUnit *unit, const char *buff);        // 是否有某buff
 bool justBeAttacked(PUnit *test);
 
+double unitDefScore(PUnit *pu);                        // 给单位的实际防守力打分
 double surviveRounds(PUnit *host, PUnit *guest);    // 计算存活轮数差:host - guest
 PUnit *findID(vector<PUnit *> units, int _id);
 
@@ -157,8 +160,12 @@ int teamAtk(vector<PUnit *> vct);
 // 更新不同战区信息,units可以领任务,然后形成team
 // global_state: inferior, equal, superior
 struct Commander {
-    vector<Hero> heroes;
-    vector<Tactic> backup;
+    vector<Hero *> heroes;
+    vector<PUnit *> sector_en;
+
+    PUnit *hot;
+    int hot_id;
+    Tactic target;
 
     /**********************************************************/
     // constructor
@@ -167,13 +174,14 @@ struct Commander {
     ~Commander();
 
     // HELPERS
-    void makeHeroes();                              // 制造一个全体我方英雄对象的向量
     void getUnits();                                // 获取单位信息
     void estimateEnemies();                         // 估计敌人人数
 
-    // tactics
-    void analyzeSituation();                        // 分析形势,设置战术
-    void tacticArrange();                           // 向向量中的英雄分配战术
+    // tactics 顺序不能错!
+    void lockTarget();                              // 分析形势,设置战术
+    void lockHot();                                 // 锁定团队热点攻击对象
+    void makeHeroes();                              // 制造英雄向量
+
     // base actions
     void attack();                                  // 基地攻击
     void buyNewHero();                              // 买英雄
@@ -184,8 +192,6 @@ struct Commander {
 
     /**********************************************************/
     // LOADER
-    void RunAnalysis();
-
     void TeamAct();                                 // 基地和英雄动作
     void StoreAndClean();                           // 储存
 
@@ -207,25 +213,22 @@ public:
     int atk, def;
     int speed, view, range;
     Pos pos;
-
     int round;                                  // 便于区分
+
     Tactic target;                              // 战术
     int hot_id;                                 // 便于储存
-
     PUnit *hot;
-    // shared units vectors
-    vector<PUnit *> battle_field_en;                 // 视野范围内的敌人
 
     /*************************Setters**************************/
     PUnit *nearestEnemy() const;
 
     // setter
     Hero *getStoredHero(int prev_n);            // 获得之前prev_n局的储存对象
-    void lockHotUnit();                         // 锁定攻击目标
 
     /*************************Helpers***************************/
     bool timeToFlee();                          // 是否应该逃窜
     bool stuck();                               // 由于未知原因卡住了
+    void checkHot();                            // 检查一下热点目标是否有问题
 
     /**************************Actions**************************/
     // 仅move
@@ -245,9 +248,8 @@ public:
     /**********************************************************/
     // constructor/destructor
     void setPtr(PUnit *unit);                   // 连接ptr
-    void setUnits();                            // 设置成员变量
 
-    Hero(PUnit *hero = nullptr);
+    Hero(PUnit *hero, PUnit *hot, Tactic target);   // Commander需要的构造器
 
     ~Hero();
 
@@ -278,7 +280,7 @@ void player_ai(const PMap &map, const PPlayerInfo &info, PCommand &cmd) {
     commander = new Commander();
 
     // Run Commander, analyze and arrange tactics
-    commander->RunAnalysis();
+    commander->makeHeroes();
 
     // Hero do actions
     commander->TeamAct();
@@ -352,7 +354,7 @@ void printUnit(vector<PUnit *> units) {
 }
 
 
-void printHeroList(vector<Hero> units) {
+void printHeroList(vector<Hero *> units) {
     logger << "@Hero list" << endl;
     if (units.empty()) {
         logger << "!! get empty Hero list" << endl;
@@ -372,22 +374,22 @@ void printHeroList(vector<Hero> units) {
     logger << endl;
     // print content
     for (int i = 0; i < units.size(); ++i) {
-        Hero unit = units[i];
+        Hero *unit = units[i];
         // print basic hero info
-        logger << left << setw(14) << unit.name;
-        logger << left << setw(5) << unit.id;
-        logger << left << setw(8) << unit.level;
-        logger << left << setw(5) << unit.hp;
-        logger << left << setw(5) << unit.mp;
-        logger << left << setw(5) << unit.atk;
-        logger << left << setw(5) << unit.def;
+        logger << left << setw(14) << unit->name;
+        logger << left << setw(5) << unit->id;
+        logger << left << setw(8) << unit->level;
+        logger << left << setw(5) << unit->hp;
+        logger << left << setw(5) << unit->mp;
+        logger << left << setw(5) << unit->atk;
+        logger << left << setw(5) << unit->def;
         // POS/TAC
-        string p = int2str(unit.pos.x) + "," + int2str(unit.pos.y);
+        string p = int2str(unit->pos.x) + "," + int2str(unit->pos.y);
         logger << left << setw(10) << p;
-        string t = int2str(unit.target.x) + "," + int2str(unit.target.y);
+        string t = int2str(unit->target.x) + "," + int2str(unit->target.y);
         logger << left << setw(10) << t;
         // BUFF
-        vector<PBuff> buff = unit.punit->buffs;
+        vector<PBuff> buff = unit->punit->buffs;
         for (int j = 0; j < buff.size(); ++j) {
             string buff_name = buff[j].name;
             string buff_str = buff_name + "(" + int2str(buff[j].timeLeft) + ")";
@@ -587,6 +589,18 @@ bool hasBuff(PUnit *unit, const char *buff) {
 }
 
 
+double unitDefScore(PUnit *pu) {
+    /*
+     * 计算公式:
+     * score = hp / max{N - def, 5}
+     * N = 100, 作为攻击力常数
+     */
+    const int N = 100;
+    double s = 1.0 * pu->hp / max(N - pu->def, 5);
+    return s;
+}
+
+
 double surviveRounds(PUnit *host, PUnit *guest) {
     /*
      * 计算公式:
@@ -646,17 +660,20 @@ Commander::Commander() {
     // Economy
     Economy = console->gold();
 
-    // cur_friends  vi_enemies
+    // 顺序不能错
+    // cur_friends  vi_enemies sector_en
     getUnits();
-    // heroes
-    makeHeroes();
     // estimate enemies
     estimateEnemies();
+    // analyze
+    lockTarget();
+    lockHot();
+    // make team
+    makeHeroes();
 }
 
 
 Commander::~Commander() {
-    backup.clear();
     heroes.clear();
     // PUnit*不能释放!
     releaseVector(cur_friends);
@@ -666,7 +683,8 @@ Commander::~Commander() {
     releaseVector(vi_mines);
     releaseVector(vi_monsters);
     clearOldInfo(str_money);
-//    clearOldInfo(str_heroes);
+    clearOldInfo(str_heroes);
+    clearOldInfo(str_cmd);
 }
 
 /**************************Helpers**************************/
@@ -724,15 +742,9 @@ void Commander::getUnits() {
     logger << "@Visible monsters" << endl;
     printUnit(vi_monsters);
     logger << endl;
+    logger << "@Sector enemies" << endl;
+    printUnit(sector_en);
 #endif
-}
-
-
-void Commander::makeHeroes() {
-    for (int i = 0; i < cur_friends.size(); ++i) {
-        Hero temp(cur_friends[i]);
-        heroes.push_back(temp);
-    }
 }
 
 
@@ -745,13 +757,94 @@ void Commander::estimateEnemies() {
 
 /*************************Tactics**************************/
 
-void Commander::analyzeSituation() {        // todo
 
+
+void Commander::lockHot() {
+    /*
+     * @优先级:
+     * WinOrDie
+     * WaitRevive
+     * 最弱单位
+     */
+    // fixme 不鲁棒
+
+
+    /* 仅攻击对手 */
+    // sector enemies
+    UnitFilter filter;
+    filter.setAreaFilter(new Circle(target, BATTLE_RANGE), "w");
+    filter.setAvoidFilter("Observer", "a");
+    filter.setCampFilter(enemyCamp());
+    sector_en = console->enemyUnits(filter);
+
+    if (sector_en.size() == 0) {
+        hot = nullptr;
+        hot_id = -1;
+        return;
+    }
+
+    vector<PUnit *> win_or_die;
+    vector<PUnit *> wait_revive;
+
+    // 特殊buff
+    for (int i = 0; i < sector_en.size(); ++i) {
+        PUnit *en = sector_en[i];
+        // WinOrDie
+        if (hasBuff(en, "WinOrDie")) {
+            win_or_die.push_back(en);
+        }
+        // WaitRevive
+        if (hasBuff(en, "WaitRevive")) {
+            wait_revive.push_back(en);
+        }
+    }
+
+    if (!win_or_die.empty()) {
+        hot = win_or_die[0];
+        hot_id = hot->id;
+        return;
+    }
+    if (!wait_revive.empty()) {
+        hot = wait_revive[0];
+        hot_id = hot->id;
+        return;
+    }
+
+    // 继承
+    if (!str_cmd.empty()) {
+        int last_id = str_cmd.back().first;
+        PUnit *last_hot = findID(sector_en, last_id);
+        if (last_hot != nullptr) {
+            hot = last_hot;
+            return;
+        }
+    }
+
+    // 寻找最弱单位
+    int index = -1;
+    double min = 1 << 30;
+    for (int j = 0; j < sector_en.size(); ++j) {
+        double score = unitDefScore(sector_en[j]);
+        if (score < min) {
+            index = j;
+            min = score;
+        }
+    }   // assert: sector_en not empty
+
+    hot = sector_en[index];
+    hot_id = hot->id;
+}
+
+void Commander::lockTarget() {
+    // 未完成
+    target = MINE_POS[0];
 }
 
 
-void Commander::tacticArrange() {
-    // todo
+void Commander::makeHeroes() {
+    for (int i = 0; i < cur_friends.size(); ++i) {
+        heroes.push_back(new Hero(cur_friends[i], hot, target));
+    }
 }
 
 
@@ -842,7 +935,7 @@ void Commander::buyLife() {
 
 void Commander::spendMoney() {
     // todo 还没有加买活,策略不佳
-    if (cur_friends.size() < 4 || estEnemies.size() >= cur_friends.size()) {
+    if (Round < 5 || estEnemies.size() >= cur_friends.size()) {
         buyNewHero();
     } else {
         levelUp();
@@ -860,19 +953,11 @@ void Commander::callBack() {
     int base_en = (int) console->enemyUnits(filter).size();
     if (base_en >= BACK_BASE)
         // 进行结算,召回响应人数的己方英雄
-        for (int i = 0; i < base_en; ++i) {
-            heroes[i].setTarget(MILITARY_BASE_POS[CAMP]);
-        }
+    target = MILITARY_BASE_POS[CAMP];
 }
 
 
 /*************************Interface**************************/
-
-void Commander::RunAnalysis() {
-    analyzeSituation();         // 可能更改了plans
-    tacticArrange();            // 分配任务
-}
-
 
 void Commander::TeamAct() {
     // base
@@ -881,7 +966,7 @@ void Commander::TeamAct() {
     spendMoney();
     // heroes
     for (int i = 0; i < heroes.size(); ++i) {
-        heroes[i].HeroAct();
+        heroes[i]->HeroAct();
     }
 #ifdef LOG
     printHeroList(heroes);
@@ -891,8 +976,9 @@ void Commander::TeamAct() {
 
 void Commander::StoreAndClean() {
     for (int i = 0; i < heroes.size(); ++i) {
-        heroes[i].StoreMe();
+        heroes[i]->StoreMe();
     }
+    str_cmd.push_back(make_pair(hot_id, target));
     str_money.push_back(Economy);
 }
 
@@ -940,66 +1026,6 @@ Hero *Hero::getStoredHero(int prev_n) {
 }
 
 
-void Hero::lockHotUnit() {      // toedit 主要策略点
-    /*
-     * @优先级:
-     * WinOrDie
-     * WaitRevive
-     * 最弱单位
-     */
-    // fixme 有问题
-
-    if (battle_field_en.size() == 0) {
-        hot = nullptr;
-        hot_id = -1;
-        return;
-    }
-
-    vector<PUnit *> win_or_die;
-    vector<PUnit *> wait_revive;
-
-    // 特殊buff
-    for (int i = 0; i < battle_field_en.size(); ++i) {
-        PUnit *en = battle_field_en[i];
-        // WinOrDie
-        if (hasBuff(en, "WinOrDie")) {
-            win_or_die.push_back(en);
-        }
-        // WaitRevive
-        if (hasBuff(en, "WaitRevive")) {
-            wait_revive.push_back(en);
-        }
-    }
-
-    if (!win_or_die.empty()) {
-        hot = win_or_die[0];
-        hot_id = hot->id;
-        return;
-    }
-    if (!wait_revive.empty()) {
-        hot = wait_revive[0];
-        hot_id = hot->id;
-        return;
-    }
-
-
-    // 寻找最弱单位
-    int index = -1;
-    double max = -1 << 30;
-    for (int j = 0; j < battle_field_en.size(); ++j) {
-        PUnit *en = battle_field_en[j];
-        double surv = surviveRounds(punit, en);
-        if (surv > max) {
-            index = j;
-            max = surv;
-        }
-    }   // assert: battle_field_en not empty
-
-    hot = battle_field_en[index];
-    hot_id = hot->id;
-}
-
-
 /**************************Helpers**************************/
 
 bool Hero::timeToFlee() {
@@ -1028,6 +1054,11 @@ bool Hero::stuck() {
     else
         return (last->pos.x == pos.x && last->pos.y == pos.y
                 && last2->pos.x == pos.x && last2->pos.y == pos.y);      // 无法重载
+}
+
+
+void Hero::checkHot() {
+    // todo
 }
 
 
@@ -1078,7 +1109,7 @@ void Hero::justMove() {
         Pos set = MINE_POS[0];
         int dist = dis2(set, pos);
         if (dist < SET_OBSERVER_RANGE) {
-            console->useSkill("SetObserver", set, punit);   // go
+            console->useSkill("SetObserver", set + Pos(3, 3), punit);   // go
 #ifdef LOG
             logger << "[skill] SetObserver at pos=";
             logger << set;
@@ -1170,20 +1201,7 @@ void Hero::berserkerAttack() {      // toedit 主要策略点 - 致命一击
 
     // 讨论环境是否安全
     bool safe = true;
-    for (int i = 0; i < battle_field_en.size(); ++i) {
-        PUnit *en = battle_field_en[i];
-        Pos en_p = en->pos;
-        int dist2 = dis2(en_p, pos);
-        // 攻击范围内
-        if (dist2 <= en->range + en->speed && en->canUseSkill("Attack")) {
-            safe = false;
-            break;
-        }
-        if (dist2 <= HAMMERATTACK_RANGE + en->speed && en->canUseSkill("HammerAttack")) {
-            safe = false;
-            break;
-        }
-    }
+    // todo unfinished
 
     // 结算
     if (safe && punit->canUseSkill("Sacrifice") && punit->canUseSkill("Attack")) {
@@ -1269,8 +1287,10 @@ void Hero::setPtr(PUnit *unit) {
         speed = 0;
         view = 0;
         range = 0;
+        // 不得不设的
         hot = nullptr;
         hot_id = -1;
+        target = Pos(0, 0);
         return;
     }
 
@@ -1279,48 +1299,31 @@ void Hero::setPtr(PUnit *unit) {
     type = unit->typeId;
     id = unit->id;
     hp = unit->hp;
-    mp = unit->mp;
     exp = unit->exp;
+    mp = unit->mp;
     level = unit->level;
     atk = unit->atk;
     def = unit->def;
     speed = unit->speed;
     view = unit->speed;
     pos = unit->pos;
+}
 
-    // 读取记录
-    Hero *last = getStoredHero(1);
-    if (last == nullptr) {
-        target = MINE_POS[0];
+
+Hero::Hero(PUnit *hero, PUnit *hot, Tactic target) {
+    setPtr(hero);
+    this->hot = hot;
+    if (hot == nullptr) {
         hot_id = -1;
     } else {
-        target = last->target;
-        hot_id = last->hot_id;
+        this->hot_id = hot->id;
     }
-}
-
-
-void Hero::setUnits() {
-    // fixme 野怪,除去observer
-    UnitFilter filter;
-    filter.setAreaFilter(new Circle(punit->pos, punit->view), "a");
-    filter.setAreaFilter(new Circle(target, HOLD_RANGE), "w");
-    filter.setAvoidFilter("Observer", "a");
-    filter.setCampFilter(enemyCamp());
-    battle_field_en = console->enemyUnits(filter);
-}
-
-
-Hero::Hero(PUnit *hero) {
-    // 顺序不能颠倒
-    setPtr(hero);
-    setUnits();
-    lockHotUnit();
+    this->target = target;
+    checkHot();
 }
 
 
 Hero::~Hero() {
-    battle_field_en.clear();
     punit = nullptr;
     hot = nullptr;
 }
@@ -1348,7 +1351,7 @@ void Hero::HeroAct() {
     }
 
     // 不得离开目标矿太远
-    if (dis2(target, pos) > view || hot == nullptr) {
+    if (dis2(target, pos) > BATTLE_RANGE || hot == nullptr) {
         justMove();
         return;
     } else {
