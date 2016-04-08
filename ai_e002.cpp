@@ -776,9 +776,6 @@ void Commander::lockHot() {
         filter.setAvoidFilter("Observer", "a");
         filter.setAvoidFilter("Mine", "w");
         sector_en = console->enemyUnits(filter);
-
-
-
     } else {
         /* 攻击中矿时仅攻击对手 */
         // sector enemies
@@ -787,64 +784,65 @@ void Commander::lockHot() {
         filter.setAvoidFilter("Observer", "a");
         filter.setCampFilter(enemyCamp());
         sector_en = console->enemyUnits(filter);
-
-        if (sector_en.size() == 0) {
-            hot = nullptr;
-            hot_id = -1;
-            return;
-        }
-
-        vector<PUnit *> win_or_die;
-        vector<PUnit *> wait_revive;
-
-        // 特殊buff
-        for (int i = 0; i < sector_en.size(); ++i) {
-            PUnit *en = sector_en[i];
-            // WinOrDie
-            if (hasBuff(en, "WinOrDie")) {
-                win_or_die.push_back(en);
-            }
-            // WaitRevive
-            if (hasBuff(en, "WaitRevive")) {
-                wait_revive.push_back(en);
-            }
-        }
-
-        if (!win_or_die.empty()) {
-            hot = win_or_die[0];
-            hot_id = hot->id;
-            return;
-        }
-        if (!wait_revive.empty()) {
-            hot = wait_revive[0];
-            hot_id = hot->id;
-            return;
-        }
-
-        // 继承
-        if (!str_cmd.empty()) {
-            int last_id = str_cmd.back().first;
-            PUnit *last_hot = findID(sector_en, last_id);
-            if (last_hot != nullptr) {
-                hot = last_hot;
-                return;
-            }
-        }
-
-        // 寻找最弱单位
-        int index = -1;
-        double min = 1 << 30;
-        for (int j = 0; j < sector_en.size(); ++j) {
-            double score = unitDefScore(sector_en[j]);
-            if (score < min) {
-                index = j;
-                min = score;
-            }
-        }   // assert: sector_en not empty
-
-        hot = sector_en[index];
-        hot_id = hot->id;
     }
+
+    if (sector_en.size() == 0) {
+        hot = nullptr;
+        hot_id = -1;
+        return;
+    }
+
+    vector<PUnit *> win_or_die;
+    vector<PUnit *> wait_revive;
+
+    // 特殊buff
+    for (int i = 0; i < sector_en.size(); ++i) {
+        PUnit *en = sector_en[i];
+        // WinOrDie
+        if (hasBuff(en, "WinOrDie")) {
+            win_or_die.push_back(en);
+        }
+        // WaitRevive
+        if (hasBuff(en, "WaitRevive")) {
+            wait_revive.push_back(en);
+        }
+    }
+
+    if (!win_or_die.empty()) {
+        hot = win_or_die[0];
+        hot_id = hot->id;
+        return;
+    }
+    if (!wait_revive.empty()) {
+        hot = wait_revive[0];
+        hot_id = hot->id;
+        return;
+    }
+
+    // 继承
+    if (!str_cmd.empty()) {
+        int last_id = str_cmd.back().first;
+        PUnit *last_hot = findID(sector_en, last_id);
+        if (last_hot != nullptr) {
+            hot = last_hot;
+            return;
+        }
+    }
+
+    // 寻找最弱单位
+    int index = -1;
+    double min = 1 << 30;
+    for (int j = 0; j < sector_en.size(); ++j) {
+        double score = unitDefScore(sector_en[j]);
+        if (score < min) {
+            index = j;
+            min = score;
+        }
+    }   // assert: sector_en not empty
+
+    hot = sector_en[index];
+    hot_id = hot->id;
+
 }
 
 void Commander::lockTarget() {
