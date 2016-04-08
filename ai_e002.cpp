@@ -53,11 +53,11 @@ static const int APPLIED_ROUND[] = {0};
 static const double LEVEL_UP_COST = 0.6;    // 升级金钱比例
 // Commander::buyNewHero
 static int BUY_RANK = 42314132;             // 请参考hero_name
-// Commander::analyzeSitu
-static int KILLS = 0;                       // 杀敌数
-static int DEATHS = 0;                      // 死亡数
 // Commander::callBack()
 static const int BACK_BASE = 2;             // 面对多少敌人,基地召回我方英雄
+// Commander::lockTarget()
+static const int BACKUP_TACTIC[] = {1, 3, 5, 6};    // 备选战术
+static const int STICK_ROUND = 60;          // 开局保留战术的时间
 
 // clearOldInfo()
 static const int CLEAN_LIMIT = 6;           // 最多保留回合记录
@@ -97,10 +97,18 @@ static vector<vector<Hero>> str_heroes;         // 储存的英雄
 typedef pair<int, Tactic> CmdInfo;
 static vector<CmdInfo> str_cmd;                 // 储存hot_id和target
 
+// Commander::analyzeSitu
+static int kills = 0;                           // 杀敌数
+static int deaths = 0;                          // 死亡数
+static int t_counter = STICK_ROUND;             // 设置战术倒计时
+static bool lost = false;                       // 当前target是否失守
+
 
 /*################# Assistant functions ####################*/
 // ================ Log Related ====================
 #ifdef LOG
+void stopClock(long start);
+
 static ofstream logger("log_info.txt");
 
 void printUnit(vector<PUnit *> units);
@@ -147,7 +155,7 @@ int buyNewCost(int cost_indx);                      // 当前购买新英雄成�
 bool hasBuff(PUnit *unit, const char *buff);        // 是否有某buff
 bool justBeAttacked(PUnit *test);
 
-double unitDefScore(PUnit *pu);                        // 给单位的实际防守力打分
+double unitDefScore(PUnit *pu);                     // 给单位的实际防守力打分
 double surviveRounds(PUnit *host, PUnit *guest);    // 计算存活轮数差:host - guest
 PUnit *findID(vector<PUnit *> units, int _id);
 
@@ -278,12 +286,24 @@ void player_ai(const PMap &map, const PPlayerInfo &info, PCommand &cmd) {
     // Create pointers
     console = new Console(map, info, cmd);
     commander = new Commander();
+#ifdef LOG
+    logger << ">> Commander constructor" << endl;
+    stopClock(start);
+#endif
 
     // Run Commander, analyze and arrange tactics
     commander->makeHeroes();
+#ifdef LOG
+    logger << ">> Make heroes" << endl;
+    stopClock(start);
+#endif
 
     // Hero do actions
     commander->TeamAct();
+#ifdef LOG
+    logger << ">> Team act" << endl;
+    stopClock(start);
+#endif
 
     // Store all
     commander->StoreAndClean();
@@ -292,13 +312,11 @@ void player_ai(const PMap &map, const PPlayerInfo &info, PCommand &cmd) {
     delete console;
 
 #ifdef LOG
-    logger << endl;
-    long end = clock();
-    double interval = 1.0 * (end - start) / CLOCKS_PER_SEC * 1000;
-    logger << "$$ Time Consumed(ms): " << interval << endl;
-    logger << endl << endl;
+    logger << ">> Total" << endl;
+    stopClock(start);
 #endif
 }
+
 
 
 
@@ -406,6 +424,14 @@ void printString(vector<T> vct) {
     for (int i = 0; i < vct.size(); ++i) {
         logger << vct[i] << endl;
     }
+}
+
+
+void stopClock(long start) {
+    long end = clock();
+    double interval = 1.0 * (end - start) / CLOCKS_PER_SEC * 1000;
+    logger << "$$ Time Consumed(ms): " << interval << endl;
+    logger << endl << endl;
 }
 
 #endif
@@ -757,8 +783,6 @@ void Commander::estimateEnemies() {
 
 /*************************Tactics**************************/
 
-
-
 void Commander::lockHot() {
     /*
      * @优先级:
@@ -766,7 +790,7 @@ void Commander::lockHot() {
      * WaitRevive
      * 最弱单位
      */
-    // fixme 不鲁棒
+    // todo 多重目标
 
     if (target != MINE_POS[0]) {
         /* 攻击其他矿时还攻击野怪/军事基地 */
@@ -775,6 +799,7 @@ void Commander::lockHot() {
         filter.setAreaFilter(new Circle(target, BATTLE_RANGE), "w");
         filter.setAvoidFilter("Observer", "a");
         filter.setAvoidFilter("Mine", "w");
+        filter.setHpFilter(1, 100000);
         sector_en = console->enemyUnits(filter);
     } else {
         /* 攻击中矿时仅攻击对手 */
@@ -846,8 +871,46 @@ void Commander::lockHot() {
 }
 
 void Commander::lockTarget() {
-    // 未完成
-    target = MINE_POS[0];
+    // todo 灵活性不够
+
+    // 倒计时
+    t_counter--;
+    // 矿能量
+
+    // 默认战术:占中
+    if (Round < STICK_ROUND) {
+        target = MINE_POS[0];
+        return;
+    }   // assert: round >= stick round
+
+    // 继承,相当于初始化
+    // assert: str_cmd not empty
+    target = str_cmd.back().second;
+
+    // 设置lost标记
+    if (t_counter <= 0) {
+        UnitFilter filter;
+        filter.setAreaFilter(new Circle(target, BATTLE_RANGE), "a");
+        if (console->friendlyUnits(filter).empty()) {
+            lost = true;
+        }
+
+        // 根据lost调整战术
+        if (lost) {
+            int index = rand() % 4;
+            if (index >= 0 && index < 4) {
+                target = MINE_POS[BACKUP_TACTIC[index]];
+                lost = false;
+                t_counter = STICK_ROUND;
+#ifdef LOG
+                logger << ">> Change plans to " << BACKUP_TACTIC[index] << endl;
+#endif
+                return;
+            }
+        }
+    }
+
+
 }
 
 
