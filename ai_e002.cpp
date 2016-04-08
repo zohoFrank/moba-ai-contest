@@ -92,10 +92,9 @@ vector<PUnit *> vi_monsters;                    // 可见野怪
 /************************************************************
  * Storage data
  ************************************************************/
-static vector<int> str_money;                   // 储存的金钱
 static vector<vector<Hero>> str_heroes;         // 储存的英雄
-typedef pair<int, Tactic> CmdInfo;
-static vector<CmdInfo> str_cmd;                 // 储存hot_id和target
+static int hot_id;                              // 储存的hot id
+static Tactic target;                           // 储存的targets
 
 // Commander::analyzeSitu
 static int kills = 0;                           // 杀敌数
@@ -134,9 +133,11 @@ template<typename T>
 void releaseVector(vector<T *> vct);
 
 template<typename T>
-bool contain(vector<T *> vct, T *elem);
+bool contain(vector<T> &vct, const T &elem);
 
 bool compareLevel(PUnit *a, PUnit *b);
+
+bool comparePos(const Pos &a, const Pos &b);        // 不让重载==,没有办法
 
 bool operator<(const Pos &a, const Pos &b);
 
@@ -173,7 +174,6 @@ struct Commander {
 
     PUnit *hot;
     int hot_id;
-    Tactic target;
 
     /**********************************************************/
     // constructor
@@ -286,24 +286,12 @@ void player_ai(const PMap &map, const PPlayerInfo &info, PCommand &cmd) {
     // Create pointers
     console = new Console(map, info, cmd);
     commander = new Commander();
-#ifdef LOG
-    logger << ">> Commander constructor" << endl;
-    stopClock(start);
-#endif
 
     // Run Commander, analyze and arrange tactics
     commander->makeHeroes();
-#ifdef LOG
-    logger << ">> Make heroes" << endl;
-    stopClock(start);
-#endif
 
-    // Hero do actions
+    // Hero do actions // todo 时间消耗大户
     commander->TeamAct();
-#ifdef LOG
-    logger << ">> Team act" << endl;
-    stopClock(start);
-#endif
 
     // Store all
     commander->StoreAndClean();
@@ -512,14 +500,8 @@ int enemyCamp() {
 
 // data structure related
 template<typename T>
-bool contain(vector<T *> vct, T *elem) {
-    // 只能针对PUnit *使用
-    for (int i = 0; i < vct.size(); ++i) {
-        if (vct[i] == elem) {
-            return true;
-        }
-    }
-    return false;
+bool contain(vector<T> &vct, const T &elem) {
+    return binary_search(vct.begin(), vct.end(), comparePos);
 }
 
 
@@ -527,6 +509,9 @@ bool compareLevel(PUnit *a, PUnit *b) {
     return (a->level < b->level);
 }
 
+bool comparePos(const Pos &a, const Pos &b) {
+    return (a.x == b.x && a.y == b.y);
+}
 
 bool operator<(const Pos &a, const Pos &b) {
     if (a.x != b.x) {
@@ -708,9 +693,7 @@ Commander::~Commander() {
     en_base = nullptr;
     releaseVector(vi_mines);
     releaseVector(vi_monsters);
-    clearOldInfo(str_money);
     clearOldInfo(str_heroes);
-    clearOldInfo(str_cmd);
 }
 
 /**************************Helpers**************************/
@@ -792,6 +775,7 @@ void Commander::lockHot() {
      */
     // todo 多重目标
 
+    // 根据战术目标,设定打击单位范围
     if (target != MINE_POS[0]) {
         /* 攻击其他矿时还攻击野怪/军事基地 */
         // sector enemies
@@ -845,13 +829,10 @@ void Commander::lockHot() {
     }
 
     // 继承
-    if (!str_cmd.empty()) {
-        int last_id = str_cmd.back().first;
-        PUnit *last_hot = findID(sector_en, last_id);
-        if (last_hot != nullptr) {
-            hot = last_hot;
-            return;
-        }
+    PUnit *last_hot = findID(sector_en, hot_id);
+    if (last_hot != nullptr) {
+        hot = last_hot;
+        return;
     }
 
     // 寻找最弱单位
@@ -872,7 +853,6 @@ void Commander::lockHot() {
 
 void Commander::lockTarget() {
     // todo 灵活性不够
-
     // 倒计时
     t_counter--;
     // 矿能量
@@ -882,10 +862,6 @@ void Commander::lockTarget() {
         target = MINE_POS[0];
         return;
     }   // assert: round >= stick round
-
-    // 继承,相当于初始化
-    // assert: str_cmd not empty
-    target = str_cmd.back().second;
 
     // 设置lost标记
     if (t_counter <= 0) {
@@ -1051,8 +1027,6 @@ void Commander::StoreAndClean() {
     for (int i = 0; i < heroes.size(); ++i) {
         heroes[i]->StoreMe();
     }
-    str_cmd.push_back(make_pair(hot_id, target));
-    str_money.push_back(Economy);
 }
 
 
