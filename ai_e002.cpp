@@ -17,7 +17,6 @@
 using namespace std;
 
 typedef Pos Tactic;
-typedef pair<int, Tactic> TacticRound;
 
 class Hero;
 
@@ -26,18 +25,8 @@ struct Commander;
 /************************************************************
  * Const values
  ************************************************************/
-static const int GAME_ROUNDS = 1000;
-static const int KEY_POINTS_NUM = 8;
-static const Pos KEY_POINTS[] = {
-        Pos(75, 146), Pos(116, 114), Pos(136, 76), Pos(117, 33),
-        Pos(75, 23), Pos(36, 37), Pos(27, 76), Pos(35, 110)
-};
 static const int HERO_COST[] = {
         NEW_HAMMERGUARD_COST, NEW_MASTER_COST, NEW_BERSERKER_COST, NEW_SCOUTER_COST,
-};
-static const int ATK_CD[] = {
-        MILITARY_BASE_ATTACK_MAXCD, 0, 0, HAMMERGUARD_ATTACK_MAXCD, MASTER_ATTACK_MAXCD,
-        BERSERKER_ATTACK_MAXCD, SCOUTER_ATTACK_MAXCD
 };
 static const char *HERO_NAME[] = {"Hammerguard", "Master", "Berserker", "Scouter"};
 
@@ -45,9 +34,6 @@ static const char *HERO_NAME[] = {"Hammerguard", "Master", "Berserker", "Scouter
 /************************************************************
  * Policy const values
  ************************************************************/
-static const int TACTIC_APPLIED[] = {6};
-static const int APPLIED_ROUND[] = {0};
-
 // Commander
 // Commander::levelUp
 static const double LEVEL_UP_COST = 0.6;    // 升级金钱比例
@@ -141,8 +127,6 @@ bool comparePos(const Pos &a, const Pos &b);        // 不让重载==,没有办�
 
 bool operator<(const Pos &a, const Pos &b);
 
-bool operator<(const TacticRound &a, const TacticRound &b);
-
 // Handling stored data
 template<typename T>
 void clearOldInfo(vector<T> &vct);                  // 及时清理陈旧储存信息
@@ -191,7 +175,7 @@ struct Commander {
     void makeHeroes();                              // 制造英雄向量
 
     // base actions
-    void attack();                                  // 基地攻击
+    void baseAttack();                                  // 基地攻击
     void buyNewHero();                              // 买英雄
     void buyLife();                                 // 买活英雄
     void levelUp();                                 // 升级英雄
@@ -250,9 +234,6 @@ public:
     void masterAttack();                        //
     void scouterAttack();                       //
 
-    // 条件判断,并调用以上move和attack接口
-    void contactAttack();                       // 全力攻击,调用移动接口
-
     /**********************************************************/
     // constructor/destructor
     void setPtr(PUnit *unit);                   // 连接ptr
@@ -286,9 +267,6 @@ void player_ai(const PMap &map, const PPlayerInfo &info, PCommand &cmd) {
     // Create pointers
     console = new Console(map, info, cmd);
     commander = new Commander();
-
-    // Run Commander, analyze and arrange tactics
-    commander->makeHeroes();
 
     // Hero do actions // todo 时间消耗大户
     commander->TeamAct();
@@ -519,11 +497,6 @@ bool operator<(const Pos &a, const Pos &b) {
     } else {
         return a.y < b.y;
     }
-}
-
-
-bool operator<(const TacticRound &a, const TacticRound &b) {
-    return a.first > b.first;       // 从大到小排序,有利于当作栈调用
 }
 
 
@@ -899,24 +872,15 @@ void Commander::makeHeroes() {
 
 /*************************Base actions**************************/
 
-void Commander::attack() {
+void Commander::baseAttack() {
     Pos our_base = MILITARY_BASE_POS[CAMP];
     UnitFilter filter;
-    filter.setAvoidFilter("MilitaryBase", "a");
     filter.setAreaFilter(new Circle(our_base, MILITARY_BASE_RANGE), "a");
     vector<PUnit *> enemies = console->enemyUnits(filter);
     if (enemies.empty()) return;
-    // 寻找血量最低的敌方单位
-    PUnit *lowest = nullptr;
-    int min_hp = -1;
-    for (int i = 0; i < enemies.size(); ++i) {
-        if (enemies[i]->hp < min_hp) {
-            lowest = enemies[i];
-            min_hp = enemies[i]->hp;
-        }
-    }
-    // 攻击
-    console->baseAttack(lowest);    // go 基地攻击
+
+    // 随便攻击一个,不用想太多
+    console->baseAttack(enemies[0]);    // go 基地攻击
 }
 
 
@@ -994,24 +958,33 @@ void Commander::spendMoney() {
 
 void Commander::callBack() {
     // todo 设计成强制设置Hero的Tactic值,暂时认为快速召回没有太大意义
+    // todo 对于小股骚扰效果不佳
     // 条件判断
     UnitFilter filter;
     filter.setAreaFilter(new Circle(MILITARY_BASE_POS[CAMP], MILITARY_BASE_VIEW), "a");
     filter.setAvoidFilter("Observer", "a");
     filter.setCampFilter(enemyCamp());
     int base_en = (int) console->enemyUnits(filter).size();
-    if (base_en >= BACK_BASE)
+    if (base_en >= BACK_BASE) {
         // 进行结算,召回响应人数的己方英雄
-    target = MILITARY_BASE_POS[CAMP];
+        for (int i = 0; i < base_en; ++i) {
+            int index = (int) (rand() % heroes.size());
+            heroes[index]->setTarget(MILITARY_BASE_POS[CAMP]);
+        }
+    }
 }
 
 
 /*************************Interface**************************/
 
 void Commander::TeamAct() {
+#ifdef LOG
+    long start = clock();
+#endif
+
     // base
     callBack();
-    attack();
+    baseAttack();
     spendMoney();
     // heroes
     for (int i = 0; i < heroes.size(); ++i) {
@@ -1186,25 +1159,6 @@ void Hero::hammerguardAttack() {
 
     // 攻击
     if (punit->canUseSkill("HammerAttack")) {
-        // 选择攻击英雄
-        UnitFilter filter;
-        filter.setAreaFilter(new Circle(pos, HAMMERATTACK_RANGE), "a");
-        filter.setCampFilter(enemyCamp());
-        filter.setAvoidFilter("Observer", "a");
-        vector<PUnit *> to_hit = console->enemyUnits(filter);
-
-        for (int i = 0; i < to_hit.size(); ++i) {
-            if (to_hit[i]->findBuff("WinOrDie")) {
-                console->useSkill("HammerAttack", to_hit[i], punit);
-#ifdef LOG
-                logger << "[skill] HammerAttack at:";
-                printAtkInfo();
-#endif
-                return;
-            }
-        }
-
-        // 没有优质攻击目标
         if (dis2(pos, hot->pos) < HAMMERATTACK_RANGE) {
             console->useSkill("HammerAttack", hot, punit);  // go
 #ifdef LOG
@@ -1297,27 +1251,6 @@ void Hero::scouterAttack() {
 }
 
 
-void Hero::contactAttack() {
-    // attack enemies
-    switch (type) {
-        case 3:
-            hammerguardAttack();
-            break;
-        case 4:
-            masterAttack();
-            break;
-        case 5:
-            berserkerAttack();
-            break;
-        case 6:
-            scouterAttack();
-            break;
-        default:
-            break;
-    }
-}
-
-
 /***********************************************************/
 
 void Hero::setPtr(PUnit *unit) {
@@ -1389,6 +1322,7 @@ void Hero::HeroAct() {
     logger << "@Act overview:" << endl;
     logger << name << "(" << id << "):" << endl;
     logger << ">> Decide to: " << endl;
+    long start = clock();
 #endif
     // todo
     // 逃跑
@@ -1402,8 +1336,27 @@ void Hero::HeroAct() {
         justMove();
         return;
     } else {
-        contactAttack();
+        switch (type) {
+            case 3:
+                hammerguardAttack();
+                break;
+            case 4:
+                masterAttack();
+                break;
+            case 5:
+                berserkerAttack();
+                break;
+            case 6:
+                scouterAttack();
+                break;
+            default:
+                break;
+        }
     }
+#ifdef LOG
+    logger << ">> this hero consumed: " << endl;
+    stopClock(start);
+#endif
 }
 
 
