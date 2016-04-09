@@ -1,5 +1,5 @@
 // 调试开关
-#define LOG
+//#define LOG
 
 #ifdef LOG
 
@@ -45,11 +45,6 @@ static const double LEVEL_UP_COST = 0.5;    // 升级金钱比例
 static int BUY_RANK = 42314132;             // 请参考hero_name
 // Commander::callBack()
 static const int BACK_BASE = 2;             // 面对多少敌人,基地召回我方英雄
-// Commander::lockTarget() 7个矿顺序依次是 0-中矿,1-8点,2-10点,3-4点,4-2点,5-西北,6-东南
-static const int SUPERIOR_TACTIC[] = {2 - CAMP, 4 - CAMP, 0};    // 优势战术
-static const int BACKUP_TACTIC[] = {1 + CAMP, 3 + CAMP, 5, 6};    // 备选战术
-static const int STICK_ROUND = 40;          // 开局保留战术的时间
-static const int HOLDS_TILL = 10;           // 连续守住回合数,才采取动作
 
 // clearOldInfo()
 static const int CLEAN_LIMIT = 6;           // 最多保留回合记录
@@ -82,15 +77,23 @@ vector<PUnit *> vi_monsters;                    // 可见野怪
  * Storage data
  ************************************************************/
 static vector<vector<Hero>> str_heroes;         // 储存的英雄
-static int hot_id;                              // 储存的hot id
-static Tactic target;                           // 储存的targets
+static int hot_id = -1;                         // 储存的hot id
+static Tactic target = MINE_POS[0];             // 储存的targets
+
+// Commander::lockTarget() 7个矿顺序依次是 0-中矿,1-8点,2-10点,3-4点,4-2点,5-西北,6-东南
+static int SUPERIOR_TACTIC[] = {0, 1, 2, 3, 4};    // 优势战术
+static int SUP_T_N = 5;
+static int BACKUP_TACTIC[] = {1, 3, 5, 6};      // 备选战术 fixme player1 ??
+static int BAK_T_N = 4;
+
+static int STICK_ROUND = 42;                    // 开局保留战术的时间
+static int HOLDS_TILL = 12;                     // 连续守住回合数,才采取动作
 
 // Commander::analyzeSitu
 static int kills = 0;                           // 杀敌数
 static int deaths = 0;                          // 死亡数
 static int t_counter = STICK_ROUND;             // 设置战术倒计时
-static int holds = 0;                           // 占据该矿的回合数
-static bool lost = false;                       // 当前target是否失守
+static int situ = 0;                            // 0-HOLD_TILL是僵持,负数是失守,>HOLD_TILL是占据
 
 
 /*################# Assistant functions ####################*/
@@ -839,26 +842,17 @@ void Commander::lockHot() {     // toedit 主要策略点
 
 void Commander::lockTarget() {
     // todo 灵活性不够,需要整理
-    // 倒计时
+    // 倒计时结束再考虑改变战术
     t_counter--;
-    // 矿能量
-
-    // 默认战术:占中
-    if (Round < STICK_ROUND) {
-        target = MINE_POS[0];
-        return;
-    }   // assert: round >= stick round
-
-    // todo 如果有能力足够,打基地
-
     if (t_counter > 0)
         return;
+
+    // todo 如果有能力足够,打基地
 
     /*
      * warn 这一段代码并没有用sector_en,因为它还没有在lockhot中被设置
      * fixme 代码之间顺序容易紊乱,后期需要调整
      */
-    // 目标战区的筛选器
     UnitFilter filter;
     filter.setAreaFilter(new Circle(target, BATTLE_RANGE), "a");
     filter.setAvoidFilter("Mine", "a");
@@ -874,49 +868,35 @@ void Commander::lockTarget() {
     }
 
     // 设置标记
-    // lost标记,当前区域没有己方单位
-    if (tar_friends.empty()) {
-        lost = true;
-    } else {
-        lost = false;   // 可能多余
-    }
-
-    // holds标记,必须是连续坚守的回合数,反映对手有变化,需要采取行动
-    if (tar_enemies.empty() && !tar_friends.empty()) {
-        holds++;
-    } else {
-        holds = 0;
+    if (tar_friends.empty()) {          // 失守了 - friends=0 warn 每次切换战术重新计时,因此不用担心跑过去过程中就失守
+        situ = -1;
+    } else if (tar_enemies.empty()){    // 占据了 - friends>0, enemies=0
+        situ = max(1, ++situ);
+    } else {                            // 僵持中 - friends>0, enemies>0
+        situ = 0;
     }
 
     // 如果lost,调整战术
-    if (lost) {
-        srand((unsigned int) Round);
-        int index = rand() % 4;
-        if (index >= 0 && index < 4) {
-            target = MINE_POS[BACKUP_TACTIC[index]];
-            lost = false;
-            t_counter = STICK_ROUND;    // 重新计时,很关键
+    if (situ < 0) {                     // 失守
+        srand((unsigned int) Round / 19);
+        int index = rand() % BAK_T_N;
+        target = MINE_POS[BACKUP_TACTIC[index]];
+        // renew
+        situ = 0;
+        t_counter = STICK_ROUND;
 #ifdef LOG
-            logger << ">> Change plans to " << BACKUP_TACTIC[index] << endl;
+        logger << ">> [LOST]Change plans to " << BACKUP_TACTIC[index] << endl;
 #endif
-            return;
-        }
-    }   // assert: lost = flase
-
-    // 如果守住了,游击
-    if (holds > HOLDS_TILL) {
-        srand((unsigned int) Round);
-        int index = rand() % 2;
-        if (index >= 0 && index < 4) {
-            target = MINE_POS[SUPERIOR_TACTIC[index]];
-
-            t_counter = STICK_ROUND;
-            holds = 0;
+    } else if (situ > HOLDS_TILL) {     // 占据
+        srand((unsigned int) Round / 17);
+        int index = rand() % SUP_T_N;
+        target = MINE_POS[SUPERIOR_TACTIC[index]];
+        // renew
+        situ = 0;
+        t_counter = STICK_ROUND;
 #ifdef LOG
-            logger << ">> Change plans to " << BACKUP_TACTIC[index] << endl;
+        logger << ">> [OCUP]Change plans to " << SUPERIOR_TACTIC[index] << endl;
 #endif
-            return;
-        }
     }
 }
 
@@ -1023,7 +1003,7 @@ void Commander::callBack() {
     if (base_en >= BACK_BASE) {
         // 进行结算,召回响应人数的己方英雄
         for (int i = 0; i < base_en; ++i) {
-            srand((unsigned int) Round);
+            srand((unsigned int) Round / 13);
             int index = (int) (rand() % heroes.size());
             heroes[index]->setTarget(MILITARY_BASE_POS[CAMP]);
         }
@@ -1183,7 +1163,7 @@ void Hero::justMove() {
         Pos set = MINE_POS[0];
         int dist = dis2(set, pos);
         if (dist < SET_OBSERVER_RANGE) {
-            console->useSkill("SetObserver", set + Pos(2, 2), punit);   // go
+            console->useSkill("SetObserver", set + Pos(3, 3), punit);   // go
 #ifdef LOG
             logger << "[skill] SetObserver at pos=";
             logger << set;
