@@ -34,16 +34,21 @@ static const char *HERO_NAME[] = {"Hammerguard", "Master", "Berserker", "Scouter
 /************************************************************
  * Policy const values
  ************************************************************/
+// unchanged values (during the entire game)
+static int CAMP = -1;                       // which camp
+
 // Commander
 // Commander::levelUp
-static const double LEVEL_UP_COST = 0.6;    // 升级金钱比例
+static const double LEVEL_UP_COST = 0.5;    // 升级金钱比例
 // Commander::buyNewHero
 static int BUY_RANK = 42314132;             // 请参考hero_name
 // Commander::callBack()
 static const int BACK_BASE = 2;             // 面对多少敌人,基地召回我方英雄
-// Commander::lockTarget()
-static const int BACKUP_TACTIC[] = {1, 3, 5, 6};    // 备选战术
+// Commander::lockTarget() 7个矿顺序依次是 0-中矿,1-8点,2-10点,3-4点,4-2点,5-西北,6-东南
+static const int SUPERIOR_TACTIC[] = {2 - CAMP, 4 - CAMP, 0};    // 优势战术
+static const int BACKUP_TACTIC[] = {1 + CAMP, 3 + CAMP, 5, 6};    // 备选战术
 static const int STICK_ROUND = 60;          // 开局保留战术的时间
+static const int HOLDS_TILL = 10;           // 连续守住回合数,才采取动作
 
 // clearOldInfo()
 static const int CLEAN_LIMIT = 6;           // 最多保留回合记录
@@ -53,8 +58,6 @@ static const int CLEAN_NUMS = 2;            // 超过最多保留记录后,一�
 static const double HP_ALERT = 0.2;         // 血量预警百分比
 static const int BATTLE_RANGE = 625;        // 战区范围
 
-// unchanged values (during the entire game)
-static int CAMP = -1;                       // which camp
 
 /************************************************************
  * Real-time sharing values
@@ -73,7 +76,6 @@ const PUnit *en_base;                           // 敌人基地
 vector<PUnit *> vi_mines;                       // 可见矿(矿的位置是默认的,但状态需要可见才能读取)
 vector<PUnit *> vi_monsters;                    // 可见野怪
 
-// 7个矿顺序依次是 0-中矿,1-8点,2-10点,3-4点,4-2点,5-西北,6-东南
 
 /************************************************************
  * Storage data
@@ -86,6 +88,7 @@ static Tactic target;                           // 储存的targets
 static int kills = 0;                           // 杀敌数
 static int deaths = 0;                          // 死亡数
 static int t_counter = STICK_ROUND;             // 设置战术倒计时
+static int holds = 0;                           // 占据该矿的回合数
 static bool lost = false;                       // 当前target是否失守
 
 
@@ -175,7 +178,7 @@ struct Commander {
     void makeHeroes();                              // 制造英雄向量
 
     // base actions
-    void baseAttack();                                  // 基地攻击
+    void baseAttack();                              // 基地攻击
     void buyNewHero();                              // 买英雄
     void buyLife();                                 // 买活英雄
     void levelUp();                                 // 升级英雄
@@ -739,31 +742,26 @@ void Commander::estimateEnemies() {
 
 /*************************Tactics**************************/
 
-void Commander::lockHot() {
+void Commander::lockHot() {     // toedit 主要策略点
     /*
      * @优先级:
      * WinOrDie
      * WaitRevive
      * 最弱单位
      */
-    // todo 多重目标
+
+    UnitFilter filter;
+    filter.setAreaFilter(new Circle(target, BATTLE_RANGE), "a");
+    filter.setAvoidFilter("Observer", "a");
+    filter.setAvoidFilter("Mine", "w");
+    filter.setHpFilter(1, 100000);
 
     // 根据战术目标,设定打击单位范围
     if (target != MINE_POS[0]) {
-        /* 攻击其他矿时还攻击野怪/军事基地 */
-        // sector enemies
-        UnitFilter filter;
-        filter.setAreaFilter(new Circle(target, BATTLE_RANGE), "w");
-        filter.setAvoidFilter("Observer", "a");
-        filter.setAvoidFilter("Mine", "w");
-        filter.setHpFilter(1, 100000);
+        // 攻击其他矿时还攻击野怪/军事基地
         sector_en = console->enemyUnits(filter);
     } else {
-        /* 攻击中矿时仅攻击对手 */
-        // sector enemies
-        UnitFilter filter;
-        filter.setAreaFilter(new Circle(target, BATTLE_RANGE), "w");
-        filter.setAvoidFilter("Observer", "a");
+        // 攻击中矿时仅攻击对手
         filter.setCampFilter(enemyCamp());
         sector_en = console->enemyUnits(filter);
     }
@@ -777,9 +775,15 @@ void Commander::lockHot() {
     vector<PUnit *> win_or_die;
     vector<PUnit *> wait_revive;
 
+    // 寻找最弱单位
+    int index = -1;
+    double min = 1 << 30;
     // 特殊buff
     for (int i = 0; i < sector_en.size(); ++i) {
         PUnit *en = sector_en[i];
+        if (hasBuff(en, "Reviving"))
+            continue;
+
         // WinOrDie
         if (hasBuff(en, "WinOrDie")) {
             win_or_die.push_back(en);
@@ -788,8 +792,17 @@ void Commander::lockHot() {
         if (hasBuff(en, "WaitRevive")) {
             wait_revive.push_back(en);
         }
+
+        // 最弱
+        double score = unitDefScore(sector_en[i]);
+        if (score < min) {
+            index = i;
+            min = score;
+        }
     }
 
+    /* 结算 */
+    // 特殊buff
     if (!win_or_die.empty()) {
         hot = win_or_die[0];
         hot_id = hot->id;
@@ -808,24 +821,19 @@ void Commander::lockHot() {
         return;
     }
 
-    // 寻找最弱单位
-    int index = -1;
-    double min = 1 << 30;
-    for (int j = 0; j < sector_en.size(); ++j) {
-        double score = unitDefScore(sector_en[j]);
-        if (score < min) {
-            index = j;
-            min = score;
-        }
-    }   // assert: sector_en not empty
-
-    hot = sector_en[index];
-    hot_id = hot->id;
+    // 最弱
+    if (index != -1) {
+        hot = sector_en[index];
+        hot_id = hot->id;
+    } else {        // 说明只有重生状态的敌人,没有其他敌人 fixme 这一段要整理一下
+        hot = nullptr;
+        hot_id = -1;
+    }
 
 }
 
 void Commander::lockTarget() {
-    // todo 灵活性不够
+    // todo 灵活性不够,需要整理
     // 倒计时
     t_counter--;
     // 矿能量
@@ -836,30 +844,69 @@ void Commander::lockTarget() {
         return;
     }   // assert: round >= stick round
 
-    // 设置lost标记
-    if (t_counter <= 0) {
-        UnitFilter filter;
-        filter.setAreaFilter(new Circle(target, BATTLE_RANGE), "a");
-        if (console->friendlyUnits(filter).empty()) {
-            lost = true;
-        }
+    // todo 如果有能力足够,打基地
 
-        // 根据lost调整战术
-        if (lost) {
-            int index = rand() % 4;
-            if (index >= 0 && index < 4) {
-                target = MINE_POS[BACKUP_TACTIC[index]];
-                lost = false;
-                t_counter = STICK_ROUND;
-#ifdef LOG
-                logger << ">> Change plans to " << BACKUP_TACTIC[index] << endl;
-#endif
-                return;
-            }
-        }
+    if (t_counter > 0)
+        return;
+
+    /*
+     * warn 这一段代码并没有用sector_en,因为它还没有在lockhot中被设置
+     * fixme 代码之间顺序容易紊乱,后期需要调整
+     */
+    // 目标战区的筛选器
+    UnitFilter filter;
+    filter.setAreaFilter(new Circle(target, BATTLE_RANGE), "a");
+    filter.setAvoidFilter("Mine", "a");
+    filter.setAvoidFilter("Observer", "w");
+    vector<PUnit *> tar_friends = console->friendlyUnits(filter);
+    vector<PUnit *> tar_enemies = console->enemyUnits(filter);
+
+
+    // 设置标记
+    // lost标记,当前区域没有己方单位
+    if (tar_friends.empty()) {
+        lost = true;
+    } else {
+        lost = false;   // 可能多余
     }
 
+    // holds标记,必须是连续坚守的回合数,反映对手有变化,需要采取行动
+    if (tar_enemies.empty() && !tar_friends.empty()) {
+        holds++;
+    } else {
+        holds = 0;
+    }
 
+    // 如果lost,调整战术
+    if (lost) {
+        srand((unsigned int) Round);
+        int index = rand() % 4;
+        if (index >= 0 && index < 4) {
+            target = MINE_POS[BACKUP_TACTIC[index]];
+            lost = false;
+            t_counter = STICK_ROUND;    // 重新计时,很关键
+#ifdef LOG
+            logger << ">> Change plans to " << BACKUP_TACTIC[index] << endl;
+#endif
+            return;
+        }
+    }   // assert: lost = flase
+
+    // 如果守住了,游击
+    if (holds > HOLDS_TILL) {
+        srand((unsigned int) Round);
+        int index = rand() % 2;
+        if (index >= 0 && index < 4) {
+            target = MINE_POS[SUPERIOR_TACTIC[index]];
+
+            t_counter = STICK_ROUND;
+            holds = 0;
+#ifdef LOG
+            logger << ">> Change plans to " << BACKUP_TACTIC[index] << endl;
+#endif
+            return;
+        }
+    }
 }
 
 
@@ -948,11 +995,8 @@ void Commander::buyLife() {
 
 void Commander::spendMoney() {
     // todo 还没有加买活,策略不佳
-    if (Round < 5 || estEnemies.size() >= cur_friends.size()) {
-        buyNewHero();
-    } else {
-        levelUp();
-    }
+    buyNewHero();
+    levelUp();
 }
 
 
@@ -968,6 +1012,7 @@ void Commander::callBack() {
     if (base_en >= BACK_BASE) {
         // 进行结算,召回响应人数的己方英雄
         for (int i = 0; i < base_en; ++i) {
+            srand((unsigned int) Round);
             int index = (int) (rand() % heroes.size());
             heroes[index]->setTarget(MILITARY_BASE_POS[CAMP]);
         }
@@ -1124,12 +1169,14 @@ void Hero::fastFlee() {
 
 
 void Hero::justMove() {
-    if (type == 6 && punit->canUseSkill("SetObserver")) {
-        // 如果离关键点比较近,那么插眼 fixme 有眼就不插了
+    bool can_set_obs = punit->canUseSkill("SetObserver");
+    if (type == 6 && can_set_obs) {
+        // todo 插眼策略点,未完成 (有眼就不插了)
+        // 如果离关键点比较近,那么插眼
         Pos set = MINE_POS[0];
         int dist = dis2(set, pos);
         if (dist < SET_OBSERVER_RANGE) {
-            console->useSkill("SetObserver", set + Pos(3, 3), punit);   // go
+            console->useSkill("SetObserver", set + Pos(2, 2), punit);   // go
 #ifdef LOG
             logger << "[skill] SetObserver at pos=";
             logger << set;
@@ -1148,8 +1195,11 @@ void Hero::justMove() {
 
 
 void Hero::hammerguardAttack() {
+    // 判断技能可用性耗时较多
+    bool can_skill = punit->canUseSkill("HammerAttack");
+    bool can_atk = punit->canUseSkill("Attack");
     // cd中
-    if (!punit->canUseSkill("HammerAttack") && !punit->canUseSkill("Attack")) {
+    if (!can_skill && !can_atk) {
         cdWalk();
 #ifdef LOG
         logger << "[move] cd walk" << endl;
@@ -1158,7 +1208,7 @@ void Hero::hammerguardAttack() {
     }
 
     // 攻击
-    if (punit->canUseSkill("HammerAttack")) {
+    if (can_skill) {
         if (dis2(pos, hot->pos) < HAMMERATTACK_RANGE) {
             console->useSkill("HammerAttack", hot, punit);  // go
 #ifdef LOG
@@ -1185,14 +1235,16 @@ void Hero::berserkerAttack() {      // toedit 主要策略点 - 致命一击
      */
     // fixme 目前策略比较失败
 
+    bool can_atk = punit->canUseSkill("Attack");
+    bool can_skill = punit->canUseSkill("Sacrifice");
     // Sacrifice中
-    if (punit->findBuff("WinOrDie") != nullptr && punit->canUseSkill("Attack")) {
+    if (punit->findBuff("WinOrDie") != nullptr && can_atk) {
         console->attack(hot, punit);        // go
         return;
     }
 
     // cd中
-    if (!punit->canUseSkill("Attack")) {
+    if (!can_atk) {
         cdWalk();
 #ifdef LOG
         logger << "[move] cd walk" << endl;
@@ -1205,7 +1257,7 @@ void Hero::berserkerAttack() {      // toedit 主要策略点 - 致命一击
     // todo unfinished
 
     // 结算
-    if (safe && punit->canUseSkill("Sacrifice") && punit->canUseSkill("Attack")) {
+    if (safe && can_skill && can_atk) {
         console->useSkill("Sacrifice", hot, punit);     // go
 #ifdef LOG
         logger << "[skill] Sacrifce" << endl;
@@ -1396,10 +1448,18 @@ void Hero::printAtkInfo() const {
 
 /*
  * todo 要更改的内容
- * 1. 集群攻击某单位(将lockhot移到Commander里面),固定的可见单位排序系统
- * 2. 逃窜的连续性
+ * 1. 小队模式
+ * 2. 野怪死亡后的判断
  * 3. Berserker的致命一击
- * 5. buyLevel, buyNew, 对部分单位进行召回升级callBack, 钱过多时进行买活buyLife
- * 7. 寻路:垂直逃逸
- * 8. hot目标逃逸后,如何处理
+ * 4. 战术可变
+// * 5. buyLevel, buyNew, 对部分单位进行召回升级callBack, 钱过多时进行买活buyLife
+ * 6. 基地攻击
+ * 7. set obsrever
+ *
+ *
+ * temp:
+ * 对抗偷基地流
+ * 对抗中路优势+分矿流
+ * 在中路优势时探索别的矿
+ * 在中路劣势时探索别的矿, 注意在不同矿区的区别
  */
