@@ -11,6 +11,7 @@
 
 #include "console.h"
 #include <sstream>
+#include <exception>
 #include <map>
 #include <set>
 
@@ -47,7 +48,7 @@ static const int BACK_BASE = 2;             // 面对多少敌人,基地召回�
 // Commander::lockTarget() 7个矿顺序依次是 0-中矿,1-8点,2-10点,3-4点,4-2点,5-西北,6-东南
 static const int SUPERIOR_TACTIC[] = {2 - CAMP, 4 - CAMP, 0};    // 优势战术
 static const int BACKUP_TACTIC[] = {1 + CAMP, 3 + CAMP, 5, 6};    // 备选战术
-static const int STICK_ROUND = 60;          // 开局保留战术的时间
+static const int STICK_ROUND = 40;          // 开局保留战术的时间
 static const int HOLDS_TILL = 10;           // 连续守住回合数,才采取动作
 
 // clearOldInfo()
@@ -160,7 +161,6 @@ struct Commander {
     vector<PUnit *> sector_en;
 
     PUnit *hot;
-    int hot_id;
 
     /**********************************************************/
     // constructor
@@ -766,6 +766,14 @@ void Commander::lockHot() {     // toedit 主要策略点
         sector_en = console->enemyUnits(filter);
     }
 
+    // 用迭代器遍历并删除指定元素 - 尸体
+    for (auto i = sector_en.begin(); i != sector_en.end(); ) {
+        if (hasBuff(*i, "Reviving"))
+            i = sector_en.erase(i);
+        else
+            i++;
+    }
+
     if (sector_en.size() == 0) {
         hot = nullptr;
         hot_id = -1;
@@ -781,9 +789,6 @@ void Commander::lockHot() {     // toedit 主要策略点
     // 特殊buff
     for (int i = 0; i < sector_en.size(); ++i) {
         PUnit *en = sector_en[i];
-        if (hasBuff(en, "Reviving"))
-            continue;
-
         // WinOrDie
         if (hasBuff(en, "WinOrDie")) {
             win_or_die.push_back(en);
@@ -822,10 +827,10 @@ void Commander::lockHot() {     // toedit 主要策略点
     }
 
     // 最弱
-    if (index != -1) {
+    try {
         hot = sector_en[index];
         hot_id = hot->id;
-    } else {        // 说明只有重生状态的敌人,没有其他敌人 fixme 这一段要整理一下
+    } catch (exception &e) {    // index = -1
         hot = nullptr;
         hot_id = -1;
     }
@@ -860,7 +865,13 @@ void Commander::lockTarget() {
     filter.setAvoidFilter("Observer", "w");
     vector<PUnit *> tar_friends = console->friendlyUnits(filter);
     vector<PUnit *> tar_enemies = console->enemyUnits(filter);
-
+    // 用迭代器遍历并删除指定元素 - 尸体
+    for (auto i = tar_enemies.begin(); i != tar_enemies.end(); ) {
+        if (hasBuff(*i, "Reviving"))
+            i = tar_enemies.erase(i);
+        else
+            i++;
+    }
 
     // 设置标记
     // lost标记,当前区域没有己方单位
@@ -1023,10 +1034,6 @@ void Commander::callBack() {
 /*************************Interface**************************/
 
 void Commander::TeamAct() {
-#ifdef LOG
-    long start = clock();
-#endif
-
     // base
     callBack();
     baseAttack();
