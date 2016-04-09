@@ -1,5 +1,5 @@
 // 调试开关
-//#define LOG
+#define LOG
 
 #ifdef LOG
 
@@ -11,7 +11,6 @@
 
 #include "console.h"
 #include <sstream>
-#include <exception>
 #include <map>
 #include <set>
 
@@ -81,13 +80,13 @@ static int hot_id = -1;                         // 储存的hot id
 static Tactic target = MINE_POS[0];             // 储存的targets
 
 // Commander::lockTarget() 7个矿顺序依次是 0-中矿,1-8点,2-10点,3-4点,4-2点,5-西北,6-东南
-static int SUPERIOR_TACTIC[] = {0, 1, 2, 3, 4};    // 优势战术
-static int SUP_T_N = 5;
-static int BACKUP_TACTIC[] = {1, 3, 5, 6};      // 备选战术 fixme player1 ??
-static int BAK_T_N = 4;
+static int SUPERIOR_TACTIC[] = {0};    // 优势战术
+static int SUP_T_N = 1;
+static int BACKUP_TACTIC[] = {5, 6};      // 备选战术 fixme player1 ??
+static int BAK_T_N = 2;
 
-static int STICK_ROUND = 42;                    // 开局保留战术的时间
-static int HOLDS_TILL = 12;                     // 连续守住回合数,才采取动作
+static int STICK_ROUND = 148;                    // 开局保留战术的时间
+static int HOLDS_TILL = 50;                     // 连续守住回合数,才采取动作
 
 // Commander::analyzeSitu
 static int kills = 0;                           // 杀敌数
@@ -858,6 +857,7 @@ void Commander::lockTarget() {
     filter.setAvoidFilter("Mine", "a");
     filter.setAvoidFilter("Observer", "w");
     vector<PUnit *> tar_friends = console->friendlyUnits(filter);
+    filter.setCampFilter(enemyCamp());
     vector<PUnit *> tar_enemies = console->enemyUnits(filter);
     // 用迭代器遍历并删除指定元素 - 尸体
     for (auto i = tar_enemies.begin(); i != tar_enemies.end(); ) {
@@ -888,6 +888,14 @@ void Commander::lockTarget() {
         logger << ">> [LOST]Change plans to " << BACKUP_TACTIC[index] << endl;
 #endif
     } else if (situ > HOLDS_TILL) {     // 占据
+        // 偷基地
+        if (cur_friends.size() >= 7) {
+            target = MILITARY_BASE_POS[enemyCamp()];
+            situ = 0;
+            t_counter = STICK_ROUND;
+            return;
+        }
+        // 围剿
         srand((unsigned int) Round / 17);
         int index = rand() % SUP_T_N;
         target = MINE_POS[SUPERIOR_TACTIC[index]];
@@ -1162,8 +1170,8 @@ void Hero::justMove() {
         // 如果离关键点比较近,那么插眼
         Pos set = MINE_POS[0];
         int dist = dis2(set, pos);
-        if (dist < SET_OBSERVER_RANGE) {
-            console->useSkill("SetObserver", set + Pos(3, 3), punit);   // go
+        if (dist < SET_OBSERVER_RANGE / 2) {
+            console->useSkill("SetObserver", pos - Pos(2, 0), punit);   // go
 #ifdef LOG
             logger << "[skill] SetObserver at pos=";
             logger << set;
@@ -1264,9 +1272,17 @@ void Hero::masterAttack() {
      * 1.与该单位的距离(range, range + blink_range]
      * 2.该单位一击便歹
      */
-    int dist = dis2(hot->pos, pos);
-    if (dist > range && dist <= range + BLINK_RANGE && hot->hp < atk) {
-        Pos chase_p = parallelChangePos(pos, hot->pos, dist - range / 2, false);
+    int dist2 = dis2(hot->pos, pos);
+    // 退后
+    if (dist2 < MASTER_RANGE) {
+        Pos bak_p = parallelChangePos(pos, hot->pos, range, true);
+        console->move(bak_p, punit);
+        return;
+    }
+
+    // 追赶
+    if (dist2 > range && dist2 <= range + BLINK_RANGE && hot->hp < atk) {
+        Pos chase_p = parallelChangePos(pos, hot->pos, dist2 - range / 2, false);
         console->useSkill("Blink", chase_p, punit);     // go
 #ifdef LOG
         logger << "[skill] chasing by Blink";
@@ -1436,17 +1452,11 @@ void Hero::printAtkInfo() const {
 /*
  * todo 要更改的内容
  * 1. 小队模式
- * 2. 野怪死亡后的判断
  * 3. Berserker的致命一击
- * 4. 战术可变
 // * 5. buyLevel, buyNew, 对部分单位进行召回升级callBack, 钱过多时进行买活buyLife
- * 6. 基地攻击
- * 7. set obsrever
  *
  *
  * temp:
  * 对抗偷基地流
  * 对抗中路优势+分矿流
- * 在中路优势时探索别的矿
- * 在中路劣势时探索别的矿, 注意在不同矿区的区别
  */
