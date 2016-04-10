@@ -85,7 +85,7 @@ static int SUP_T_N = 5;
 static int BACKUP_TACTIC[] = {5, 6};               // 备选战术 player1
 static int BAK_T_N = 2;
 
-static int STICK_ROUND = 148;                    // 开局保留战术的时间
+static int STICK_ROUND = 40;                    // 开局保留战术的时间
 static int HOLDS_TILL = 50;                     // 连续守住回合数,才采取动作
 
 // Commander::analyzeSitu
@@ -875,11 +875,24 @@ void Commander::lockTarget() {
         else
             i++;
     }
+    // 找矿对象
+    UnitFilter mine_filter;
+    mine_filter.setAreaFilter(new Circle(target, 10), "a");
+    mine_filter.setTypeFilter("Mine", "a");
+    vector<PUnit *> mine = console->enemyUnits(mine_filter);
+    bool mine_empty = false;
+    if (mine.size() == 1 && mine[0]->isMine()) {
+        int energy = console->unitArg("energy", "c", mine[0]);
+        mine_empty = (energy < 2);
+#ifdef LOG
+        logger << ">> Mine checked!  energy = " << energy << endl;
+#endif
+    }
 
     // 设置标记
     if (tar_friends.empty()) {          // 失守了 - friends=0 warn 每次切换战术重新计时,因此不用担心跑过去过程中就失守
         situ = -1;
-    } else if (tar_enemies.empty()){    // 占据了 - friends>0, enemies=0
+    } else if (tar_enemies.empty() || mine_empty){    // 占据了 - friends>0, enemies=0
         situ = max(1, ++situ);
     } else {                            // 僵持中 - friends>0, enemies>0
         situ = 0;
