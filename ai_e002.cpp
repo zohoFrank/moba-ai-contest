@@ -578,7 +578,8 @@ int buyNewCost(int cost_idx) {
 
 bool hasBuff(PUnit *unit, const char *buff) {
     vector<PBuff> buffs = unit->buffs;
-    for (int i = 0; i < buffs.size(); ++i) {
+    int _sz = (int) buffs.size();
+    for (int i = 0; i < _sz; ++i) {
         if (strcasecmp(buffs[i].name, buff) == 0)
             return true;
     }
@@ -616,7 +617,8 @@ double surviveRounds(PUnit *host, PUnit *guest) {
 PUnit *findID(vector<PUnit *> units, int _id) {
     if (_id == -1) return nullptr;
 
-    for (int i = 0; i < units.size(); ++i) {
+    int _sz = (int) units.size();
+    for (int i = 0; i < _sz; ++i) {
         if (units[i]->id == _id) {
             return units[i];
         }
@@ -636,7 +638,9 @@ bool justBeAttacked(PUnit *test) {
 
 int teamAtk(vector<PUnit *> vct) {
     int round_atk = 0;
-    for (int i = 0; i < vct.size(); ++i) {
+
+    int _sz = (int) vct.size();
+    for (int i = 0; i < _sz; ++i) {
         round_atk += vct[i]->atk;
     }
     return round_atk;
@@ -745,7 +749,8 @@ void Commander::getUnits() {
 
 
 void Commander::estimateEnemies() {
-    for (int i = 0; i < vi_enemies.size(); ++i) {
+    int _sz = (int) vi_enemies.size();
+    for (int i = 0; i < _sz; ++i) {
         estEnemies.insert(vi_enemies[i]->id);
     }
 }
@@ -796,9 +801,10 @@ void Commander::lockHot() {     // toedit 主要策略点
 
     // 寻找最弱单位
     int index = -1;
-    double min = 1 << 30;
+    double min = INT_MAX;
     // 特殊buff
-    for (int i = 0; i < sector_en.size(); ++i) {
+    int _sz = (int) sector_en.size();
+    for (int i = 0; i < _sz; ++i) {
         PUnit *en = sector_en[i];
         // WinOrDie
         if (hasBuff(en, "WinOrDie")) {
@@ -932,7 +938,8 @@ void Commander::lockTarget() {
 
 
 void Commander::makeHeroes() {
-    for (int i = 0; i < cur_friends.size(); ++i) {
+    int _sz = (int) cur_friends.size();
+    for (int i = 0; i < _sz; ++i) {
         heroes.push_back(new Hero(cur_friends[i], hot, target));
     }
 }
@@ -990,7 +997,8 @@ void Commander::levelUp() {  // toedit 主要策略点
     int round_cost = 0;
 
     // 贪心
-    for (int i = 0; i < nearHeroes.size(); ++i) {
+    int _sz = (int) nearHeroes.size();
+    for (int i = 0; i < _sz; ++i) {
         if (round_cost >= LEVEL_UP_COST * Economy) {
             if (!toLevelUp.empty()) {
                 toLevelUp.pop_back();           // 弹出,使花费严格小于标准
@@ -1002,7 +1010,8 @@ void Commander::levelUp() {  // toedit 主要策略点
     }
 
     // 结算
-    for (int j = 0; j < toLevelUp.size(); ++j) {
+    int _sz2 = (int) toLevelUp.size();
+    for (int j = 0; j < _sz2; ++j) {
         console->buyHeroLevel(toLevelUp[j]);    // go
     }
 }
@@ -1051,7 +1060,8 @@ void Commander::TeamAct() {
     baseAttack();
     spendMoney();
     // heroes
-    for (int i = 0; i < heroes.size(); ++i) {
+    int _sz = (int) heroes.size();
+    for (int i = 0; i < _sz; ++i) {
         heroes[i]->HeroAct();
     }
 #ifdef LOG
@@ -1061,7 +1071,8 @@ void Commander::TeamAct() {
 
 
 void Commander::StoreAndClean() {
-    for (int i = 0; i < heroes.size(); ++i) {
+    int _sz = (int) heroes.size();
+    for (int i = 0; i < _sz; ++i) {
         heroes[i]->StoreMe();
     }
 }
@@ -1075,14 +1086,15 @@ void Commander::StoreAndClean() {
 /*************************Setters**************************/
 
 PUnit *Hero::nearestEnemy() const {
+    int _sz = (int) vi_enemies.size();
     // 可攻击对象不存在
-    if (vi_enemies.size() == 0)
+    if (_sz == 0)
         return nullptr;
 
-    int min_dist = MAP_SIZE * MAP_SIZE;
+    int min_dist = INT_MAX;
     PUnit *selected = nullptr;
 
-    for (int i = 0; i < vi_enemies.size(); ++i) {
+    for (int i = 0; i < _sz; ++i) {
         PUnit *it = vi_enemies[i];
         int dist = dis2(it->pos, pos);
         if (dist < min_dist) {
@@ -1100,7 +1112,8 @@ Hero *Hero::getStoredHero(int prev_n) {
 
     vector<Hero> round = str_heroes[str_heroes.size() - 1 - prev_n];
     Hero *same = nullptr;
-    for (int i = 0; i < round.size(); ++i) {
+    int _sz = (int) round.size();
+    for (int i = 0; i < _sz; ++i) {
         Hero *temp = &round[i];
         if (temp->type == type && temp->id == id) {
             same = temp;
@@ -1153,7 +1166,7 @@ void Hero::cdWalk() {       // toedit 主要策略点
     if (nearest == nullptr)
         return;
 
-    Pos ref_p = nearestEnemy()->pos;               // position of reference
+    Pos ref_p = nearest->pos;               // position of reference
     // 撤离的距离为保持两者间距一个speed
     Pos far_p = parallelChangePos(pos, ref_p, speed, true);
     console->move(far_p, punit);        // go
@@ -1475,7 +1488,8 @@ void Hero::printAtkInfo() const {
 
 /*
  * todo 要更改的内容
- * 1. 小队模式
+ * 1. 小队模式: 走位/队形...
+ * 2. cdWalk
  * 3. Berserker的致命一击
 // * 5. buyLevel, buyNew, 对部分单位进行召回升级callBack, 钱过多时进行买活buyLife
  *
