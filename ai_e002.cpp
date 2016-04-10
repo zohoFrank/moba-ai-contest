@@ -80,9 +80,9 @@ static int hot_id = -1;                         // 储存的hot id
 static Tactic target = MINE_POS[0];             // 储存的targets
 
 // Commander::lockTarget() 7个矿顺序依次是 0-中矿,1-8点,2-10点,3-4点,4-2点,5-西北,6-东南
-static int SUPERIOR_TACTIC[] = {0};    // 优势战术
-static int SUP_T_N = 1;
-static int BACKUP_TACTIC[] = {5, 6};      // 备选战术 fixme player1 ??
+static int SUPERIOR_TACTIC[] = {0, 1, 2, 3, 4};    // 优势战术
+static int SUP_T_N = 5;
+static int BACKUP_TACTIC[] = {5, 6};               // 备选战术 fixme player1 ??
 static int BAK_T_N = 2;
 
 static int STICK_ROUND = 148;                    // 开局保留战术的时间
@@ -112,6 +112,7 @@ void printString(vector<T> vct);      // T重载了<<
 
 // =============== Basic Algorithms ================
 // Path finding
+void modifyTactic(int *tactics, int size);                // 对于player1和0的区别,修改战术
 Pos parallelChangePos(const Pos &origin, const Pos &reference, int len2, bool away = true);  // 详见实现
 Pos verticalChangePos(const Pos &origin, const Pos &reference, int len2, bool clockwize = true);  //详见实现
 
@@ -408,6 +409,10 @@ void stopClock(long start) {
 #endif
 
 // algorithms
+void modifyTactic() {
+
+}
+
 Pos parallelChangePos(
         const Pos &origin,
         const Pos &reference,
@@ -650,6 +655,7 @@ Commander::Commander() {
     Economy = console->gold();
 
     // 顺序不能错
+    modifyTactic();
     // cur_friends  vi_enemies sector_en
     getUnits();
     // estimate enemies
@@ -1009,12 +1015,14 @@ void Commander::callBack() {
     filter.setCampFilter(enemyCamp());
     int base_en = (int) console->enemyUnits(filter).size();
     if (base_en >= BACK_BASE) {
-        // 进行结算,召回响应人数的己方英雄
-        for (int i = 0; i < base_en; ++i) {
-            srand((unsigned int) Round / 13);
-            int index = (int) (rand() % heroes.size());
-            heroes[index]->setTarget(MILITARY_BASE_POS[CAMP]);
-        }
+//        // 进行结算,召回响应人数的己方英雄
+//        for (int i = 0; i < base_en; ++i) {
+//            srand((unsigned int) Round / 13);
+//            int index = (int) (rand() % heroes.size());
+//            heroes[index]->setTarget(MILITARY_BASE_POS[CAMP]);
+//        }
+        target = MILITARY_BASE_POS[CAMP];
+        STICK_ROUND = 50;
     }
 }
 
