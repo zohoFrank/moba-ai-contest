@@ -80,8 +80,8 @@ static int hot_id = -1;                         // 储存的hot id
 static Tactic target = MINE_POS[0];             // 储存的targets
 
 // Commander::lockTarget() 7个矿顺序依次是 0-中矿,1-8点,2-10点,3-4点,4-2点,5-西北,6-东南
-static int SUPERIOR_TACTIC[] = {0, 1, 2, 3, 4};    // 优势战术
-static int SUP_T_N = 5;
+static int SUPERIOR_TACTIC[] = {0};    // 优势战术
+static int SUP_T_N = 1;
 static int BACKUP_TACTIC[] = {5, 6};               // 备选战术 fixme player1 ??
 static int BAK_T_N = 2;
 
