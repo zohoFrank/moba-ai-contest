@@ -1314,12 +1314,6 @@ void Hero::masterAttack() {
      * 2.该单位一击便歹
      */
     int dist2 = dis2(hot->pos, pos);
-    // 退后
-    if (dist2 < MASTER_RANGE) {
-        Pos bak_p = parallelChangePos(pos, hot->pos, range, true);
-        console->move(bak_p, punit);
-        return;
-    }
 
     // 追赶
     if (dist2 > range && dist2 <= range + BLINK_RANGE && hot->hp < atk) {
