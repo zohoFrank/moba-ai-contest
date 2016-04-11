@@ -1,5 +1,5 @@
 // 调试开关
-//#define LOG
+#define LOG
 
 #ifdef LOG
 
@@ -18,9 +18,10 @@ using namespace std;
 
 typedef Pos Tactic;
 
-class Hero;
+struct Hero;
 
-struct Commander;
+class Commander;
+
 /*######################## DATA ###########################*/
 /************************************************************
  * Const values
@@ -159,18 +160,15 @@ int teamAtk(vector<PUnit *> vct);
 // 全局指挥官,分析形势,买活,升级,召回等,也充当本方base角色
 // 更新不同战区信息,units可以领任务,然后形成team
 // global_state: inferior, equal, superior
-struct Commander {
+class Commander {
+private:
     vector<Hero *> heroes;
     vector<PUnit *> sector_en;
 
     PUnit *hot;
 
     /**********************************************************/
-    // constructor
-    Commander();
-
-    ~Commander();
-
+protected:
     // HELPERS
     void getUnits();                                // 获取单位信息
     void estimateEnemies();                         // 估计敌人人数
@@ -188,6 +186,12 @@ struct Commander {
     void spendMoney();                              // 买英雄/买等级/买活的选择
     void callBack();                                // 召回英雄
 
+public:
+    // constructor
+    Commander();
+
+    ~Commander();
+
     /**********************************************************/
     // LOADER
     void TeamAct();                                 // 基地和英雄动作
@@ -200,7 +204,7 @@ struct Commander {
  ************************************************************/
 // 重新封装PUnit数据,便于数据储存
 // 由于单位种类太少,技能也很少,所以暂不计划采用继承的方式
-class Hero {
+struct Hero {
 public:
     PUnit *punit;
     /*************************Info**************************/
