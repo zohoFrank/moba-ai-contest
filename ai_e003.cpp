@@ -24,6 +24,8 @@ class Commander;
 
 class AssaultSquad;
 
+class MainCarrier; class MineDigger; class BattleScouter;
+
 /*######################## DATA ###########################*/
 /************************************************************
  * Const values
@@ -81,6 +83,8 @@ const PUnit *en_base;                           // 敌人基地
 vector<PUnit *> vi_mines;                       // 可见矿(矿的位置是默认的,但状态需要可见才能读取)
 vector<PUnit *> vi_monsters;                    // 可见野怪
 
+vector<Hero *> heroes;
+
 
 /************************************************************
  * Storage data
@@ -88,14 +92,6 @@ vector<PUnit *> vi_monsters;                    // 可见野怪
 static vector<vector<Hero>> StrHeroes;          // 储存的英雄
 
 /* 战术核心 */
-// 继承上一轮
-static int HotId = -1;                          // 储存的hot id
-static Tactic Target = MINE_POS[0];             // 储存的targets
-// todo
-static const int SQUAD_N = 3;                   // 小队数量 todo 三个小队三种类型任务
-static int SquadTargets[SQUAD_N] = {};          // 小队战术id
-static int SquadHots[SQUAD_N] = {};             // 小队热点id
-
 // 7个矿顺序依次是 0-中矿,1-8点,2-10点,3-4点,4-2点,5-西北,6-东南
 static int SuperiorTactics[] = {0, 1, 2, 3, 4}; // 优势战术
 static int SupTN = 5;
@@ -110,10 +106,19 @@ static int TCounter = StickRounds;              // 设置战术倒计时
 // 战局判断
 static int Situation = 0;                       // 0-HOLD_TILL是僵持,负数是失守,>HOLD_TILL是占据
 
-// 其他待定
-// Commander::analyzeSitu
-static int Kills = 0;                           // 杀敌数
-static int Deaths = 0;                          // 死亡数
+// 继承上一轮
+static int HotId = -1;                          // 储存的hot id
+static Tactic Target = MINE_POS[0];             // 储存的targets
+// todo
+static const int SQUAD_N = 3;                   // 小队数量 todo 三个小队三种类型任务
+static int SquadTargets[SQUAD_N] = {};          // 小队战术id
+static int SquadHots[SQUAD_N] = {};             // 小队热点id
+static AssaultSquad AllSquads[SQUAD_N] = {
+        MainCarrier(0, 0, 0, TCounter),         // type0 任务:主力攻击
+        MineDigger(0, 0, 1, TCounter),          // type1 任务:分矿/守矿
+        BattleScouter(0, 0, 2, TCounter)        // type2 任务:巡查
+};                                              // 所有小队,默认初始化后需要调整参数
+
 
 
 /*################# Assistant functions ####################*/
@@ -180,7 +185,6 @@ double unitAtkScore(PUnit *pu);                     // todo 单位进攻评估
 // global_state: inferior, equal, superior
 class Commander {
 private:
-    vector<Hero *> heroes;
     vector<PUnit *> sector_en;
 
     PUnit *hot;
@@ -191,11 +195,8 @@ protected:
     void getUnits();                                // 获取单位信息
 
     // tactics 顺序不能错!
-    void lockTarget();                              // 分析形势,设置战术
     void lockSquadTarget();                         // 指定小队目标
     void regroup();                                 // 重组小队
-    void lockHot();                                 // 锁定团队热点攻击对象
-    void makeHeroes();                              // 制造英雄
     void makeSquads();                              // 制造小队
 
     // base actions
@@ -222,47 +223,73 @@ public:
 
 
 /************************************************************
- * Assault Squad
+ * Assault Squads
  ************************************************************/
 // 突击小队
 class AssaultSquad {
 private:
     int member_n;                       // 成员人数
-    vector<int> member_id;              // 成员id,便于储存和查询
-    vector<Hero *> members;             // 成员指针,便于调用
-    vector<Pos> stand;                  // 站位
-
-    PUnit *hot_id;                      // 热点对象id
-    PUnit *hot;                         // 热点对象指针
-
     int target_id;                      // 战术编号:0-6矿,10-11基地
     int task_type;                      // todo 还没有配置
     int t_counter;                      // 战术倒计时
+
+    int hot_id;                         // 热点对象id
     int situation;                      // 小队战况
+
+    vector<int> member_id;              // 成员id,便于储存和查询
+    vector<Hero *> members;             // 成员指针,便于调用
+    vector<Pos> stand;                  // 站位
+    PUnit *hot;                         // 热点对象指针
 
 protected:
     /*************************HELPER****************************/
     // construct
-    void makeHeroes();                  // 根据需要取用英雄
-    void lockHot();
-
-    // tasks
-    void scout();
-    void goMining();
-    void readyBattle();
+    virtual void makeHeroes() = 0;                  // 根据需要取用英雄
+    virtual void lockHot() = 0;
 
     // path finding
     void adjustPos();
 
 
 public:
-    AssaultSquad(int _member_n, int _tid, int _ttype, int _tcounter);
+    AssaultSquad(int _member_n, int _tar_id, int _tac_type, int _tcounter);
     ~AssaultSquad();
 
     /*************************LOADER****************************/
-    void SquadAct();
+    virtual void SquadAct() = 0;
     void StoreMe();
 };
+
+/*****************************Main Carrier*******************************/
+// 主力战队
+class MainCarrier : public AssaultSquad {
+
+
+public:
+    MainCarrier(int _member_n , int _tar_id, int _tac_type, int _tcouter);
+};
+
+
+
+/*****************************Mine Digger*******************************/
+// 分矿/挖矿小队
+class MineDigger : public AssaultSquad {
+
+public:
+    MineDigger(int _member_n, int _tar_id, int _tac_type, int _tcounter);
+};
+
+
+
+/*****************************Battle Scouter*******************************/
+// 分矿/挖矿小队
+class BattleScouter : public AssaultSquad {
+
+
+public:
+    BattleScouter(int _member_n, int _tar_id, int _tac_type, int _tcounter);
+};
+
 
 
 /************************************************************
@@ -272,29 +299,23 @@ public:
 // 由于单位种类太少,技能也很少,所以暂不计划采用继承的方式
 struct Hero {
 public:
-    PUnit *punit;
-    /*************************Info**************************/
-    string name;
-    int type, id;
-    int hp, mp;
-    int exp, level;
-    int atk, def;
-    int speed, view, range;
-    Pos pos;
+    int id, target_id, hot_id;
     int round;                                  // 便于区分
+    /************************一次性调用*************************/
+    PUnit *punit;
+    Tactic target;                              // 战术
+    PUnit *hot;
+    // 常用
+    int type, hp, atk, speed, range;
+    Pos pos;
 
-    // todo
     bool can_skill;
     bool can_attack;
+    bool called;                                // 是否被小队认领
 
-    Tactic target;                              // 战术
-    int hot_id;                                 // 便于储存
-    PUnit *hot;
-
-    /*************************Setters**************************/
+    /*********************************************************/
     PUnit *nearestEnemy() const;
     Hero *getStoredHero(int prev_n);            // 获得之前prev_n局的储存对象
-    void setPtr(PUnit *unit);                   // 连接ptr
 
     /*************************Helpers***************************/
     bool timeToFlee();                          // 是否应该逃窜
@@ -315,7 +336,8 @@ public:
 
     /**********************************************************/
     // constructor/destructor
-    Hero(PUnit *hero, PUnit *hot, Tactic target);   // Commander需要的构造器
+    Hero(int _id, int _hot, int _tactic);
+    Hero(PUnit *me, PUnit *hot, int t_id);
 
     ~Hero();
 
@@ -436,16 +458,17 @@ void printHeroList(vector<Hero *> units) {
     // print content
     for (int i = 0; i < units.size(); ++i) {
         Hero *unit = units[i];
+        PUnit *ptr = unit->punit;
         // print basic hero info
-        logger << left << setw(14) << unit->name;
-        logger << left << setw(5) << unit->id;
-        logger << left << setw(8) << unit->level;
-        logger << left << setw(5) << unit->hp;
-        logger << left << setw(5) << unit->mp;
-        logger << left << setw(5) << unit->atk;
-        logger << left << setw(5) << unit->def;
+        logger << left << setw(14) << ptr->name;
+        logger << left << setw(5) << ptr->id;
+        logger << left << setw(8) << ptr->level;
+        logger << left << setw(5) << ptr->hp;
+        logger << left << setw(5) << ptr->mp;
+        logger << left << setw(5) << ptr->atk;
+        logger << left << setw(5) << ptr->def;
         // POS/TAC
-        string p = int2str(unit->pos.x) + "," + int2str(unit->pos.y);
+        string p = int2str(ptr->pos.x) + "," + int2str(ptr->pos.y);
         logger << left << setw(10) << p;
         string t = int2str(unit->target.x) + "," + int2str(unit->target.y);
         logger << left << setw(10) << t;
@@ -724,7 +747,7 @@ Commander::Commander() {
 
     // 顺序不能错
     modifyBackupTactic(BackupTactics, BakTN);
-    // cur_friends  vi_enemies sector_en
+    // cur_friends  vi_enemies
     getUnits();
     // analyze
     lockTarget();
@@ -1404,58 +1427,53 @@ void Hero::scouterAttack() {
 
 /***********************************************************/
 
-void Hero::setPtr(PUnit *unit) {
-    if (unit == nullptr) {
-        name = "";
-        type = -1;
-        id = -1;
-        hp = 0;
-        mp = 0;
-        exp = 0;
-        level = 0;
-        atk = 0;
-        def = 0;
-        speed = 0;
-        view = 0;
-        range = 0;
-        // 不得不设的
-        hot = nullptr;
-        hot_id = -1;
-        target = Pos(0, 0);
-        return;
-    }
+Hero::Hero(int _id, int _hot, int _tactic) {
+    // 初始化
+    id = _id;
+    hot_id = _hot;
+    target_id = _tactic;
 
-    punit = unit;
-    name = unit->name;
-    type = unit->typeId;
-    id = unit->id;
-    hp = unit->hp;
-    exp = unit->exp;
-    mp = unit->mp;
-    level = unit->level;
-    atk = unit->atk;
-    def = unit->def;
-    speed = unit->speed;
-    view = unit->speed;
-    pos = unit->pos;
+    // 一次性调用设置
+    punit = console->getUnit(id);
+    target = TACTICS[target_id];
+    hot = console->getUnit(hot_id);
+    type = punit->typeId;
+    hp = punit->hp;
+    atk = punit->atk;
+    speed = punit->speed;
+    range = punit->range;
+    pos = punit->pos;
+
+    can_skill = punit->canUseSkill(SKILL_NAME[punit->typeId + 5]);
+    can_attack = punit->canUseSkill("Attack");
+    called = false;
 }
 
 
-Hero::Hero(PUnit *hero, PUnit *hot, Tactic target) {
-    setPtr(hero);
+Hero::Hero(PUnit *me, PUnit *hot, int t_id) {
+    // 初始化
+    this->punit = me;
     this->hot = hot;
+    target_id = t_id;
+    id = punit->id;
     if (hot == nullptr) {
         hot_id = -1;
     } else {
-        this->hot_id = hot->id;
+        hot_id = hot->id;
     }
-    this->target = target;
-    checkHot();
 
-    // can use skill? (saving time)
-    int skill_index = type + 5;     // warn skill_name_index - type_name_index = 5
-    can_skill = punit->canUseSkill(SKILL_NAME[skill_index]);
+    // 一次性调用
+    target = TACTICS[target_id];
+    type = punit->typeId;
+    hp = punit->hp;
+    atk = punit->atk;
+    speed = punit->speed;
+    range = punit->range;
+    pos = punit->pos;
+
+    can_skill = punit->canUseSkill(SKILL_NAME[punit->typeId + 5]);
     can_attack = punit->canUseSkill("Attack");
+    called = false;
 }
 
 
@@ -1476,7 +1494,7 @@ void Hero::HeroAct() {
 #ifdef LOG
     logger << endl;
     logger << "@Act overview:" << endl;
-    logger << name << "(" << id << "):" << endl;
+    logger << punit->name << "(" << id << "):" << endl;
     logger << ">> Decide to: " << endl;
     long start = clock();
 #endif
