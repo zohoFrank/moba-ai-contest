@@ -805,7 +805,7 @@ void Commander::lockHot() {     // toedit 主要策略点
 
     // 寻找最弱单位
     int index = -1;
-    double min = INT_MAX;
+    double min = 1 << 30;
     // 特殊buff
     int _sz = (int) sector_en.size();
     for (int i = 0; i < _sz; ++i) {
@@ -902,7 +902,7 @@ void Commander::lockTarget() {
     // 设置标记
     if (tar_friends.empty()) {          // 失守了 - friends=0 warn 每次切换战术重新计时,因此不用担心跑过去过程中就失守
         situ = -1;
-    } else if (tar_enemies.empty() || mine_empty){    // 占据了 - friends>0, enemies=0
+    } else if (tar_enemies.empty() || mine_empty) {    // 占据了 - friends>0, enemies=0
         situ = max(1, ++situ);
     } else {                            // 僵持中 - friends>0, enemies>0
         situ = 0;
@@ -912,7 +912,12 @@ void Commander::lockTarget() {
     if (situ < 0) {                     // 失守
         srand((unsigned int) Round / 19);
         int index = rand() % BAK_T_N;
-        target = MINE_POS[BACKUP_TACTIC[index]];
+        if (comparePos(target, MILITARY_BASE_POS[enemyCamp()])) {   // 如果是攻基地败退
+            target = MINE_POS[0];
+        } else {
+            target = MINE_POS[BACKUP_TACTIC[index]];
+        }
+
         // renew
         situ = 0;
         t_counter = STICK_ROUND;
@@ -1095,7 +1100,7 @@ PUnit *Hero::nearestEnemy() const {
     if (_sz == 0)
         return nullptr;
 
-    int min_dist = INT_MAX;
+    int min_dist = 1 << 30;
     PUnit *selected = nullptr;
 
     for (int i = 0; i < _sz; ++i) {
