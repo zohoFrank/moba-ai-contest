@@ -22,6 +22,8 @@ struct Hero;
 
 class Commander;
 
+class AssaultSquad;
+
 /*######################## DATA ###########################*/
 /************************************************************
  * Const values
@@ -32,6 +34,11 @@ static const int HERO_COST[] = {
 static const char *HERO_NAME[] = {"Hammerguard", "Master", "Berserker", "Scouter"};
 
 static const int TAC_TARGETS_N = 9;         // 7个矿+2个基地
+static const Tactic TACTICS[] = {
+        MINE_POS[0], MINE_POS[1], MINE_POS[2], MINE_POS[3],
+        MINE_POS[4], MINE_POS[5], MINE_POS[6],
+        MILITARY_BASE_POS[0], MILITARY_BASE_POS[1]
+};
 
 
 /************************************************************
@@ -83,8 +90,11 @@ static vector<vector<Hero>> StrHeroes;          // 储存的英雄
 /* 战术核心 */
 // 继承上一轮
 static int HotId = -1;                          // 储存的hot id
-static vector<AssaultSquad> SquadTactic;        // todo 储存的小队列表
 static Tactic Target = MINE_POS[0];             // 储存的targets
+// todo
+static const int SQUAD_N = 3;                   // 小队数量 todo 三个小队三种类型任务
+static int SquadTargets[SQUAD_N] = {};          // 小队战术id
+static int SquadHots[SQUAD_N] = {};             // 小队热点id
 
 // 7个矿顺序依次是 0-中矿,1-8点,2-10点,3-4点,4-2点,5-西北,6-东南
 static int SuperiorTactics[] = {0, 1, 2, 3, 4}; // 优势战术
@@ -99,7 +109,6 @@ static int TCounter = StickRounds;              // 设置战术倒计时
 
 // 战局判断
 static int Situation = 0;                       // 0-HOLD_TILL是僵持,负数是失守,>HOLD_TILL是占据
-static int TargetValue[TAC_TARGETS_N] = {};     // todo 计算得出的目标价值
 
 // 其他待定
 // Commander::analyzeSitu
@@ -137,12 +146,7 @@ string int2str(int n);
 template<typename T>
 void releaseVector(vector<T *> vct);
 
-template<typename T>
-bool contain(vector<T> &vct, const T &elem);
-
 bool compareLevel(PUnit *a, PUnit *b);
-
-bool comparePos(const Pos &a, const Pos &b);        // 不让重载==,没有办法
 
 bool operator<(const Pos &a, const Pos &b);
 
@@ -163,10 +167,10 @@ bool justBeAttacked(PUnit *test);
 double surviveRounds(PUnit *host, PUnit *guest);    // 计算存活轮数差:host - guest
 PUnit *findID(vector<PUnit *> units, int _id);
 
-// Scores
+// ============== Evaluation ===================
 int teamAtk(vector<PUnit *> vct);
-double unitDefScore(PUnit *pu);                     // 给单位的实际防守力打分
-int targetValue(Tactic target);                     // todo 战术目标的价值
+double unitDefScore(PUnit *pu);                     // 给单位的实际防守力评估
+double unitAtkScore(PUnit *pu);                     // todo 单位进攻评估
 
 /************************************************************
  * Global commander
@@ -185,14 +189,14 @@ private:
 protected:
     // HELPERS
     void getUnits();                                // 获取单位信息
-    void estimateEnemies();                         // 估计敌人人数
 
     // tactics 顺序不能错!
     void lockTarget();                              // 分析形势,设置战术
-    void regroupSquad();                            // 重组小队
     void lockSquadTarget();                         // 指定小队目标
+    void regroup();                                 // 重组小队
     void lockHot();                                 // 锁定团队热点攻击对象
-    void makeHeroes();                              // 制造英雄向量
+    void makeHeroes();                              // 制造英雄
+    void makeSquads();                              // 制造小队
 
     // base actions
     void baseAttack();                              // 基地攻击
@@ -223,6 +227,7 @@ public:
 // 突击小队
 class AssaultSquad {
 private:
+    int member_n;                       // 成员人数
     vector<int> member_id;              // 成员id,便于储存和查询
     vector<Hero *> members;             // 成员指针,便于调用
     vector<Pos> stand;                  // 站位
@@ -230,25 +235,31 @@ private:
     PUnit *hot_id;                      // 热点对象id
     PUnit *hot;                         // 热点对象指针
 
-    Tactic target;                      // 战术
-    Tactic target_id;                   // 战术编号:0-6矿,10-11基地
+    int target_id;                      // 战术编号:0-6矿,10-11基地
     int task_type;                      // todo 还没有配置
+    int t_counter;                      // 战术倒计时
+    int situation;                      // 小队战况
 
 protected:
     /*************************HELPER****************************/
+    // construct
+    void makeHeroes();                  // 根据需要取用英雄
+    void lockHot();
+
+    // tasks
     void scout();
     void goMining();
     void readyBattle();
 
+    // path finding
     void adjustPos();
 
-    /*************************LOADER****************************/
-    void lockHot();
 
 public:
-    AssaultSquad();
+    AssaultSquad(int _member_n, int _tid, int _ttype, int _tcounter);
     ~AssaultSquad();
 
+    /*************************LOADER****************************/
     void SquadAct();
     void StoreMe();
 };
@@ -550,18 +561,8 @@ int enemyCamp() {
 
 
 // data structure related
-template<typename T>
-bool contain(vector<T> &vct, const T &elem) {
-    return binary_search(vct.begin(), vct.end(), comparePos);
-}
-
-
 bool compareLevel(PUnit *a, PUnit *b) {
     return (a->level < b->level);
-}
-
-bool comparePos(const Pos &a, const Pos &b) {
-    return (a.x == b.x && a.y == b.y);
 }
 
 bool operator<(const Pos &a, const Pos &b) {
@@ -647,18 +648,6 @@ bool hasBuff(PUnit *unit, const char *buff) {
 }
 
 
-double unitDefScore(PUnit *pu) {
-    /*
-     * 计算公式:
-     * score = hp / max{N - def, 5}
-     * N = 100, 作为攻击力常数
-     */
-    const int N = 100;
-    double s = 1.0 * pu->hp / max(N - pu->def, 5);
-    return s;
-}
-
-
 double surviveRounds(PUnit *host, PUnit *guest) {
     /*
      * 计算公式:
@@ -707,6 +696,18 @@ int teamAtk(vector<PUnit *> vct) {
 }
 
 
+double unitDefScore(PUnit *pu) {
+    /*
+     * 计算公式:
+     * score = hp / max{N - def, 5}
+     * N = 100, 作为攻击力常数
+     */
+    const int N = 100;
+    double s = 1.0 * pu->hp / max(N - pu->def, 5);
+    return s;
+}
+
+
 /************************************************************
  * Implementation: class Commander
  ************************************************************/
@@ -725,8 +726,6 @@ Commander::Commander() {
     modifyBackupTactic(BackupTactics, BakTN);
     // cur_friends  vi_enemies sector_en
     getUnits();
-    // estimate enemies
-    estimateEnemies();
     // analyze
     lockTarget();
     lockHot();
@@ -805,14 +804,6 @@ void Commander::getUnits() {
     logger << "@Sector enemies" << endl;
     printUnit(sector_en);
 #endif
-}
-
-
-void Commander::estimateEnemies() {
-    int _sz = (int) vi_enemies.size();
-    for (int i = 0; i < _sz; ++i) {
-        EstEnemies.insert(vi_enemies[i]->id);
-    }
 }
 
 
@@ -913,6 +904,7 @@ void Commander::lockHot() {     // toedit 主要策略点
     }
 
 }
+
 
 void Commander::lockTarget() {
     // todo 灵活性不够,需要整理
@@ -1136,6 +1128,19 @@ void Commander::StoreAndClean() {
         heroes[i]->StoreMe();
     }
 }
+
+
+/************************************************************
+ * Implementation: class AssaultSquad
+ ************************************************************/
+
+/*************************HELPER****************************/
+
+
+
+/*************************LOADER****************************/
+
+
 
 
 
