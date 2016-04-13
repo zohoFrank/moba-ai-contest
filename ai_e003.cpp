@@ -18,13 +18,13 @@ using namespace std;
 
 typedef Pos Tactic;
 
-struct Hero;
+class Hero;
 
 class Commander;
 
 class AssaultSquad;
 
-class MainCarrier; class MineDigger; class BattleScouter;
+class MainCarrier; class AmbashSquad; class BattleScouter;
 
 /*######################## DATA ###########################*/
 /************************************************************
@@ -110,13 +110,14 @@ static int Situation = 0;                       // 0-HOLD_TILL是僵持,负数�
 static int HotId = -1;                          // 储存的hot id
 static Tactic Target = MINE_POS[0];             // 储存的targets
 // todo
-static const int SQUAD_N = 3;                   // 小队数量 todo 三个小队三种类型任务
+static const int SQUAD_N = 4;                   // 小队数量 todo 三个小队三种类型任务
 static int SquadTargets[SQUAD_N] = {};          // 小队战术id
 static int SquadHots[SQUAD_N] = {};             // 小队热点id
 static AssaultSquad AllSquads[SQUAD_N] = {
-        MainCarrier(0, 0, 0, TCounter),         // type0 任务:主力攻击
-        MineDigger(0, 0, 1, TCounter),          // type1 任务:分矿/守矿
-        BattleScouter(0, 0, 2, TCounter)        // type2 任务:巡查
+        MainCarrier(0, 0, TCounter),            // type0 任务:主力攻击
+        MainCarrier(0, 0, TCounter),            // type0
+        AmbashSquad(0, 0, TCounter),            // type1 任务:伏击
+        BattleScouter(0, 0, TCounter)           // type2 任务:巡查
 };                                              // 所有小队,默认初始化后需要调整参数
 
 
@@ -195,9 +196,9 @@ protected:
     void getUnits();                                // 获取单位信息
 
     // tactics 顺序不能错!
+    void makeSquads();                              // 制造小队
     void lockSquadTarget();                         // 指定小队目标
     void regroup();                                 // 重组小队
-    void makeSquads();                              // 制造小队
 
     // base actions
     void baseAttack();                              // 基地攻击
@@ -230,7 +231,6 @@ class AssaultSquad {
 private:
     int member_n;                       // 成员人数
     int target_id;                      // 战术编号:0-6矿,10-11基地
-    int task_type;                      // todo 还没有配置
     int t_counter;                      // 战术倒计时
 
     int hot_id;                         // 热点对象id
@@ -241,53 +241,57 @@ private:
     vector<Pos> stand;                  // 站位
     PUnit *hot;                         // 热点对象指针
 
+
 protected:
     /*************************HELPER****************************/
     // construct
-    virtual void makeHeroes() = 0;                  // 根据需要取用英雄
-    virtual void lockHot() = 0;
-
-    // path finding
-    void adjustPos();
+    virtual void lockHot();
 
 
 public:
-    AssaultSquad(int _member_n, int _tar_id, int _tac_type, int _tcounter);
-    ~AssaultSquad();
+    AssaultSquad(int _member_n, int _tar_id, int _tcounter);
+    virtual ~AssaultSquad();
 
     /*************************LOADER****************************/
-    virtual void SquadAct() = 0;
-    void StoreMe();
+    virtual void SquadCommand();
+    virtual void StoreMe();
 };
 
 /*****************************Main Carrier*******************************/
 // 主力战队
 class MainCarrier : public AssaultSquad {
 
+protected:
+
 
 public:
-    MainCarrier(int _member_n , int _tar_id, int _tac_type, int _tcouter);
+    MainCarrier(int _member_n , int _tar_id, int _tcouter);
 };
 
 
 
-/*****************************Mine Digger*******************************/
-// 分矿/挖矿小队
-class MineDigger : public AssaultSquad {
+/*****************************Ambash Squad*******************************/
+// 伏击小队
+class AmbashSquad : public AssaultSquad {
+
+protected:
+    virtual void lockHot() override;
 
 public:
-    MineDigger(int _member_n, int _tar_id, int _tac_type, int _tcounter);
+    AmbashSquad(int _member_n, int _tar_id, int _tcounter);
 };
 
 
 
 /*****************************Battle Scouter*******************************/
-// 分矿/挖矿小队
+// 侦查小队
 class BattleScouter : public AssaultSquad {
 
+protected:
+    virtual void lockHot() override;
 
 public:
-    BattleScouter(int _member_n, int _tar_id, int _tac_type, int _tcounter);
+    BattleScouter(int _member_n, int _tar_id, int _tcounter);
 };
 
 
@@ -296,9 +300,8 @@ public:
  * Heroes
  ************************************************************/
 // 重新封装PUnit数据,便于数据储存
-// 由于单位种类太少,技能也很少,所以暂不计划采用继承的方式
-struct Hero {
-public:
+class Hero {
+private:
     int id, target_id, hot_id;
     int round;                                  // 便于区分
     /************************一次性调用*************************/
@@ -311,48 +314,100 @@ public:
 
     bool can_skill;
     bool can_attack;
-    bool called;                                // 是否被小队认领
 
+
+protected:
     /*********************************************************/
-    PUnit *nearestEnemy() const;
-    Hero *getStoredHero(int prev_n);            // 获得之前prev_n局的储存对象
+    virtual PUnit *nearestEnemy() const;
+    virtual Hero *getStoredHero(int prev_n);            // 获得之前prev_n局的储存对象
 
     /*************************Helpers***************************/
-    bool timeToFlee();                          // 是否应该逃窜
-    bool stuck();                               // 由于未知原因卡住了
-    void checkHot();                            // 检查一下热点目标是否有问题
+    virtual bool timeToFlee();                          // 是否应该逃窜
+    virtual bool stuck();                               // 由于未知原因卡住了
+    virtual void checkHot();                            // 检查一下热点目标是否有问题
 
     /**************************Actions**************************/
     // 仅move
-    void cdWalk();                              // cd间的躲避步伐
-    void fastFlee();                            // 快速逃窜步伐
-    void justMove();                            // 前往目标
+    virtual void cdWalk();                              // cd间的躲避步伐
+    virtual void fastFlee();                            // 快速逃窜步伐
+    virtual void justMove();                            // 前往目标
 
+
+public:
+    /**********************************************************/
+    // constructor/destructor
+    Hero(int _id, int _hot = -1, int _tactic = 0);
+    Hero(PUnit *me, PUnit *hot = nullptr, int t_id = 0);
+    Hero();
+
+    virtual ~Hero();
+
+    /*************************Loader***************************/
+    // 接口
+    virtual void setTarget(Tactic t);                   // 设置战术
+
+    // LOADER
+    virtual void Attack() = 0;
+    virtual void Move(Pos p);
+
+    // fixme 以下几段代码需要重构并放弃
+    void HeroAct();         // 调用一切动作接口
+    void StoreMe();     // 储存该英雄信息
     // 仅attack
     void hammerguardAttack();                   //
     void berserkerAttack();                     //
     void masterAttack();                        //
     void scouterAttack();                       //
 
-    /**********************************************************/
-    // constructor/destructor
-    Hero(int _id, int _hot, int _tactic);
-    Hero(PUnit *me, PUnit *hot, int t_id);
-
-    ~Hero();
-
-    /*************************Loader***************************/
-    // Commander接口
-    void setTarget(Tactic t);                   // 设置战术
-
-    // LOADER
-    void HeroAct();         // 调用一切动作接口
-    void StoreMe();     // 储存该英雄信息
-
 #ifdef LOG
     void printAtkInfo() const;
 #endif
 };
+
+
+
+/*****************************Hammerguard*******************************/
+class HammerGuard : public Hero {
+
+public:
+    virtual void Attack() override;
+};
+
+
+
+/******************************Berserker********************************/
+class Berserker : public Hero {
+
+public:
+    virtual void Attack() override;
+};
+
+
+
+/*******************************Master*********************************/
+class Master : public Hero {
+
+protected:
+    virtual void fastFlee() override;
+
+
+public:
+    virtual void Attack() override;
+};
+
+
+
+/******************************Scouter********************************/
+class Scouter : public Hero {
+
+protected:
+    virtual void justMove() override;
+
+public:
+    virtual void Attack() override;
+    virtual void Move(Pos p) override;
+};
+
 
 
 /*#################### MAIN FUNCTION #######################*/
@@ -750,10 +805,6 @@ Commander::Commander() {
     // cur_friends  vi_enemies
     getUnits();
     // analyze
-    lockTarget();
-    lockHot();
-    // make team
-    makeHeroes();
 }
 
 
@@ -1157,11 +1208,9 @@ void Commander::StoreAndClean() {
  * Implementation: class AssaultSquad
  ************************************************************/
 
-/*************************HELPER****************************/
 
 
 
-/*************************LOADER****************************/
 
 
 
@@ -1427,13 +1476,8 @@ void Hero::scouterAttack() {
 
 /***********************************************************/
 
-Hero::Hero(int _id, int _hot, int _tactic) {
-    // 初始化
-    id = _id;
-    hot_id = _hot;
-    target_id = _tactic;
-
-    // 一次性调用设置
+Hero::Hero(int _id, int _hot, int _tactic) :
+        id(_id), hot_id(_hot), target_id(_tactic){
     punit = console->getUnit(id);
     target = TACTICS[target_id];
     hot = console->getUnit(hot_id);
@@ -1446,15 +1490,11 @@ Hero::Hero(int _id, int _hot, int _tactic) {
 
     can_skill = punit->canUseSkill(SKILL_NAME[punit->typeId + 5]);
     can_attack = punit->canUseSkill("Attack");
-    called = false;
 }
 
 
-Hero::Hero(PUnit *me, PUnit *hot, int t_id) {
-    // 初始化
-    this->punit = me;
-    this->hot = hot;
-    target_id = t_id;
+Hero::Hero(PUnit *me, PUnit *hot, int t_id) :
+        punit(me), hot(hot), target_id(t_id) {
     id = punit->id;
     if (hot == nullptr) {
         hot_id = -1;
@@ -1473,7 +1513,6 @@ Hero::Hero(PUnit *me, PUnit *hot, int t_id) {
 
     can_skill = punit->canUseSkill(SKILL_NAME[punit->typeId + 5]);
     can_attack = punit->canUseSkill("Attack");
-    called = false;
 }
 
 
@@ -1566,6 +1605,30 @@ void Hero::printAtkInfo() const {
 }
 
 #endif
+
+/************************************************************
+ * Implementation: class HammerGuard
+ ************************************************************/
+
+
+
+
+/************************************************************
+ * Implementation: class Berserker
+ ************************************************************/
+
+
+
+/************************************************************
+ * Implementation: class Master
+ ************************************************************/
+
+
+
+/************************************************************
+ * Implementation: class Scouter
+ ************************************************************/
+
 
 
 /*
