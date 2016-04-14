@@ -231,6 +231,7 @@ public:
     bool timeToFlee();                          // 是否应该逃窜
     bool stuck();                               // 由于未知原因卡住了
     void checkHot();                            // 检查一下热点目标是否有问题
+    bool stepBack();                            // 远程单位躲避近程攻击
 
     /**************************Actions**************************/
     // 仅move
@@ -1168,6 +1169,24 @@ void Hero::checkHot() {
 }
 
 
+bool Hero::stepBack() {
+    PUnit *nearest = nearestEnemy();
+    if (nearest == nullptr)
+        return false;
+
+    if (dis2(pos, nearest->pos) < range / 4) {
+        Pos bak = parallelChangePos(pos, nearest->pos, range / 3, true);
+        console->move(bak, punit);
+#ifdef LOG
+        logger << "[mov] step backwards" << endl;
+#endif
+        return true;
+    } else {
+        return false;
+    }
+}
+
+
 /**************************Actions**************************/
 
 void Hero::cdWalk() {       // toedit 主要策略点
@@ -1293,12 +1312,24 @@ void Hero::berserkerAttack() {      // toedit 主要策略点 - 致命一击
         return;
     } // assert: can attack
 
-    // 讨论环境是否安全
+    // 讨论是否有意义
+    bool works = true;
+    if (dis2(hot->pos, pos) > range)
+        works = false;
+    // 讨论是否安全
     bool safe = true;
-    // todo unfinished
+    UnitFilter filter;
+    filter.setAreaFilter(new Circle(pos, HAMMERATTACK_RANGE), "a");
+    vector<PUnit *> nears = console->enemyUnits(filter);
+    for (int i = 0; i < nears.size(); ++i) {
+        if (nears[i]->canUseSkill("HammerAttack")) {
+            safe = false;
+            break;
+        }
+    }
 
     // 结算
-    if (safe && can_skill && can_atk) {
+    if (safe && works && can_skill && can_atk) {
         console->useSkill("Sacrifice", hot, punit);     // go
 #ifdef LOG
         logger << "[skill] Sacrifce" << endl;
@@ -1318,11 +1349,14 @@ void Hero::masterAttack() {
      * 1.与该单位的距离(range, range + blink_range]
      * 2.该单位一击便歹
      */
+    if (stepBack())
+        return;
+
     int dist2 = dis2(hot->pos, pos);
 
     // 追赶
-    if (dist2 > range && dist2 <= range + BLINK_RANGE && hot->hp < atk) {
-        Pos chase_p = parallelChangePos(pos, hot->pos, dist2 - range / 2, false);
+    if (dist2 > range && dist2 <= range + BLINK_RANGE && hot->hp < atk * 2) {
+        Pos chase_p = parallelChangePos(pos, hot->pos, BLINK_RANGE, false);
         console->useSkill("Blink", chase_p, punit);     // go
 #ifdef LOG
         logger << "[skill] chasing by Blink";
@@ -1338,6 +1372,9 @@ void Hero::masterAttack() {
 
 
 void Hero::scouterAttack() {
+    if (stepBack())
+        return;
+
     // 没有cd
     console->attack(hot, punit);        // go
 #ifdef LOG
@@ -1381,6 +1418,7 @@ void Hero::setPtr(PUnit *unit) {
     def = unit->def;
     speed = unit->speed;
     view = unit->speed;
+    range = unit->range;
     pos = unit->pos;
 }
 

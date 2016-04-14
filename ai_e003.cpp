@@ -24,7 +24,7 @@ class Commander;
 
 class AssaultSquad;
 
-class MainCarrier; class AmbashSquad; class BattleScouter;
+class MainCarrier; class MineDigger; class BattleScouter;
 
 /*######################## DATA ###########################*/
 /************************************************************
@@ -40,6 +40,11 @@ static const Tactic TACTICS[] = {
         MINE_POS[0], MINE_POS[1], MINE_POS[2], MINE_POS[3],
         MINE_POS[4], MINE_POS[5], MINE_POS[6],
         MILITARY_BASE_POS[0], MILITARY_BASE_POS[1]
+};
+
+static const int OBSERVE_POS_N = 1;
+static const Pos OBSERVE_POS[OBSERVE_POS_N] = {     // 带偏移量防止碰撞半径引起麻烦
+        MINE_POS[0] + Pos(3, 3)
 };
 
 
@@ -110,14 +115,18 @@ static int Situation = 0;                       // 0-HOLD_TILL是僵持,负数�
 static int HotId = -1;                          // 储存的hot id
 static Tactic Target = MINE_POS[0];             // 储存的targets
 // todo
-static const int SQUAD_N = 4;                   // 小队数量 todo 三个小队三种类型任务
+static const int SQUAD_N = 8;                   // 小队数量 todo 三个小队三种类型任务
 static int SquadTargets[SQUAD_N] = {};          // 小队战术id
 static int SquadHots[SQUAD_N] = {};             // 小队热点id
 static AssaultSquad AllSquads[SQUAD_N] = {
         MainCarrier(0, 0, TCounter),            // type0 任务:主力攻击
         MainCarrier(0, 0, TCounter),            // type0
-        AmbashSquad(0, 0, TCounter),            // type1 任务:伏击
-        BattleScouter(0, 0, TCounter)           // type2 任务:巡查
+        MainCarrier(0, 0, TCounter),            // type0
+        MineDigger(0, 0, TCounter),             // type1 任务:挖矿
+        MineDigger(0, 0, TCounter),             // type1
+        MineDigger(0, 0, TCounter),             // type1
+        BattleScouter(0, 0, TCounter),          // type2 任务:巡查
+        BattleScouter(0, 0, TCounter)           // type2
 };                                              // 所有小队,默认初始化后需要调整参数
 
 
@@ -178,6 +187,8 @@ int teamAtk(vector<PUnit *> vct);
 double unitDefScore(PUnit *pu);                     // 给单位的实际防守力评估
 double unitAtkScore(PUnit *pu);                     // todo 单位进攻评估
 
+
+
 /************************************************************
  * Global commander
  ************************************************************/
@@ -196,9 +207,8 @@ protected:
     void getUnits();                                // 获取单位信息
 
     // tactics 顺序不能错!
-    void makeSquads();                              // 制造小队
     void lockSquadTarget();                         // 指定小队目标
-    void regroup();                                 // 重组小队
+    void makeHeroes();                              // 构造英雄
 
     // base actions
     void baseAttack();                              // 基地攻击
@@ -234,7 +244,6 @@ private:
     int t_counter;                      // 战术倒计时
 
     int hot_id;                         // 热点对象id
-    int situation;                      // 小队战况
 
     vector<int> member_id;              // 成员id,便于储存和查询
     vector<Hero *> members;             // 成员指针,便于调用
@@ -253,32 +262,46 @@ public:
     virtual ~AssaultSquad();
 
     /*************************LOADER****************************/
-    virtual void SquadCommand();
+    virtual void SquadCommand() = 0;
     virtual void StoreMe();
 };
+
+
 
 /*****************************Main Carrier*******************************/
 // 主力战队
 class MainCarrier : public AssaultSquad {
+    friend class Commander;
+
+private:
+    int situation;
 
 protected:
 
 
 public:
     MainCarrier(int _member_n , int _tar_id, int _tcouter);
+
+    virtual void SquadCommand();
 };
 
 
 
-/*****************************Ambash Squad*******************************/
-// 伏击小队
-class AmbashSquad : public AssaultSquad {
+/*****************************Mine Digger*******************************/
+// 挖矿小队
+class MineDigger : public AssaultSquad {
+    friend class Commander;
+
+private:
+
 
 protected:
     virtual void lockHot() override;
 
 public:
-    AmbashSquad(int _member_n, int _tar_id, int _tcounter);
+    MineDigger(int _member_n, int _tar_id, int _tcounter);
+
+    virtual void SquadCommand();
 };
 
 
@@ -286,12 +309,20 @@ public:
 /*****************************Battle Scouter*******************************/
 // 侦查小队
 class BattleScouter : public AssaultSquad {
+    friend class Commander;
+
+private:
+    vector<int> scout_list;                         // 设定侦查list,从队尾开始巡查
+    int last_seen_round[TAC_TARGETS_N] = {};        // 记录上次观测到的回合数
+    int enemies_n[TAC_TARGETS_N] = {};              // 记录上次观测时各矿区人数
 
 protected:
     virtual void lockHot() override;
 
 public:
     BattleScouter(int _member_n, int _tar_id, int _tcounter);
+
+    virtual void SquadCommand();
 };
 
 
@@ -301,7 +332,8 @@ public:
  ************************************************************/
 // 重新封装PUnit数据,便于数据储存
 class Hero {
-private:
+    friend void printHeroList(vector<Hero *> units);
+protected:
     int id, target_id, hot_id;
     int round;                                  // 便于区分
     /************************一次性调用*************************/
@@ -315,13 +347,13 @@ private:
     bool can_skill;
     bool can_attack;
 
-
-protected:
     /*********************************************************/
     virtual PUnit *nearestEnemy() const;
     virtual Hero *getStoredHero(int prev_n);            // 获得之前prev_n局的储存对象
 
     /*************************Helpers***************************/
+    virtual bool outOfField();                          // 离开战场了
+    virtual bool timeToSkill() = 0;                     // 技能释放环境判断
     virtual bool timeToFlee();                          // 是否应该逃窜
     virtual bool stuck();                               // 由于未知原因卡住了
     virtual void checkHot();                            // 检查一下热点目标是否有问题
@@ -330,34 +362,26 @@ protected:
     // 仅move
     virtual void cdWalk();                              // cd间的躲避步伐
     virtual void fastFlee();                            // 快速逃窜步伐
-    virtual void justMove();                            // 前往目标
-
+    virtual void justMove();                                // 一般移动接口
 
 public:
     /**********************************************************/
     // constructor/destructor
     Hero(int _id, int _hot = -1, int _tactic = 0);
     Hero(PUnit *me, PUnit *hot = nullptr, int t_id = 0);
-    Hero();
 
     virtual ~Hero();
 
     /*************************Loader***************************/
-    // 接口
-    virtual void setTarget(Tactic t);                   // 设置战术
+    // 动作集成
+    virtual void Emergency();                           // 一般紧急动作接口 (排除:需要逃跑,离开战场,没有攻击对象,同时-不能释放技能且不能进攻)
+    virtual void Attack();                              // 一般攻击接口
 
-    // LOADER
-    virtual void Attack() = 0;
-    virtual void Move(Pos p);
+    // 统一调用接口
+    virtual void HeroAct();
 
     // fixme 以下几段代码需要重构并放弃
-    void HeroAct();         // 调用一切动作接口
     void StoreMe();     // 储存该英雄信息
-    // 仅attack
-    void hammerguardAttack();                   //
-    void berserkerAttack();                     //
-    void masterAttack();                        //
-    void scouterAttack();                       //
 
 #ifdef LOG
     void printAtkInfo() const;
@@ -368,8 +392,13 @@ public:
 
 /*****************************Hammerguard*******************************/
 class HammerGuard : public Hero {
+protected:
+    // override
+    virtual bool timeToSkill() override;
 
 public:
+    HammerGuard(int _id, int _hot = -1, int _tactic = 0);
+
     virtual void Attack() override;
 };
 
@@ -377,8 +406,16 @@ public:
 
 /******************************Berserker********************************/
 class Berserker : public Hero {
+protected:
+    // override
+    virtual bool timeToSkill() override;
+
+    // my
+    bool readySacrifice();                              // sacrifice准备动作
 
 public:
+    Berserker(int _id, int _hot = -1, int _tactic = 0);
+
     virtual void Attack() override;
 };
 
@@ -388,10 +425,17 @@ public:
 class Master : public Hero {
 
 protected:
+    // override
+    virtual bool timeToSkill() override;
     virtual void fastFlee() override;
 
+    // my methods
+    Pos blinkTarget(bool chase = true);                                      // 闪烁位置
 
 public:
+    Master(int _id, int _hot = -1, int _tactic = 0);
+
+    virtual void Emergency() override;
     virtual void Attack() override;
 };
 
@@ -401,11 +445,19 @@ public:
 class Scouter : public Hero {
 
 protected:
-    virtual void justMove() override;
+    // override
+    virtual bool timeToSkill() override;
+
+    // my methods
+    Pos observeTarget();                                    // 监视者设置位置
+//    Pos stepBackwards();                                    // 退后设置
 
 public:
+    Scouter(int _id, int _hot = -1, int _tactic = 0);
+
+    virtual void Emergency() override;
     virtual void Attack() override;
-    virtual void Move(Pos p) override;
+    virtual void justMove() override;
 };
 
 
@@ -882,7 +934,7 @@ void Commander::getUnits() {
 
 
 /*************************Tactics**************************/
-
+// todo 需要修改的bug函数们
 void Commander::lockHot() {     // toedit 主要策略点
     /*
      * @优先级:
@@ -1279,6 +1331,11 @@ bool Hero::timeToFlee() {
     return false;
 }
 
+bool Hero::outOfField() {
+    int dist2 = dis2(pos, target);
+    return dist2 > BATTLE_RANGE;
+}
+
 
 bool Hero::stuck() {
     Hero *last = getStoredHero(1);
@@ -1337,143 +1394,6 @@ void Hero::fastFlee() {
 }
 
 
-void Hero::justMove() {
-    if (type == 6 && can_skill) {
-        // todo 插眼策略点,未完成 (有眼就不插了)
-        // 如果离关键点比较近,那么插眼
-        Pos set = MINE_POS[0];
-        int dist = dis2(set, pos);
-        if (dist < SET_OBSERVER_RANGE / 2) {
-            console->useSkill("SetObserver", pos - Pos(2, 0), punit);   // go
-#ifdef LOG
-            logger << "[skill] SetObserver at pos=";
-            logger << set;
-            logger << "  dist=" << dist << endl;
-#endif
-            return;
-        }
-    }
-
-    console->move(target, punit);      // go
-#ifdef LOG
-    logger << "[move] ";
-    logger << target << endl;
-#endif
-}
-
-
-void Hero::hammerguardAttack() {
-    // cd中
-    if (!can_skill && !can_attack) {
-        cdWalk();
-#ifdef LOG
-        logger << "[move] cd walk" << endl;
-#endif
-        return;
-    }
-
-    // 攻击
-    if (can_skill) {
-        if (dis2(pos, hot->pos) < HAMMERATTACK_RANGE) {
-            console->useSkill("HammerAttack", hot, punit);  // go
-#ifdef LOG
-            logger << "[skill] HammerAttack at:";
-            printAtkInfo();
-#endif
-            return;
-        }
-    }
-
-    // assert: 不能使用技能,或能使用但是没有可行对象
-    console->attack(hot, punit);                    // go
-#ifdef LOG
-    printAtkInfo();
-#endif
-}
-
-
-void Hero::berserkerAttack() {      // toedit 主要策略点 - 致命一击
-    /*
-     * 使用Sacrifice的条件:
-     * 1.没有AttackCd
-     * 2.遍历所有敌人,应该不存在:其射程既能包含我,又没有AttackCd
-     */
-    // fixme 目前策略比较失败
-
-    // Sacrifice中
-    if (punit->findBuff("WinOrDie") != nullptr && can_attack) {
-        console->attack(hot, punit);        // go
-        return;
-    }
-
-    // cd中
-    if (!can_attack) {
-        cdWalk();
-#ifdef LOG
-        logger << "[move] cd walk" << endl;
-#endif
-        return;
-    } // assert: can attack
-
-    // 讨论环境是否安全
-    bool safe = true;
-    // todo unfinished
-
-    // 结算
-    if (safe && can_skill && can_attack) {
-        console->useSkill("Sacrifice", hot, punit);     // go
-#ifdef LOG
-        logger << "[skill] Sacrifce" << endl;
-#endif
-    } else {    // assert: can attack
-        console->attack(hot, punit);                    // go
-#ifdef LOG
-        printAtkInfo();
-#endif
-    }
-}
-
-
-void Hero::masterAttack() {
-    /*
-     * blink追击的条件: (master普通攻击没有cd)
-     * 1.与该单位的距离(range, range + blink_range]
-     * 2.该单位一击便歹
-     */
-    int dist2 = dis2(hot->pos, pos);
-    // 退后
-    if (dist2 < MASTER_RANGE) {
-        Pos bak_p = parallelChangePos(pos, hot->pos, range, true);
-        console->move(bak_p, punit);
-        return;
-    }
-
-    // 追赶
-    if (dist2 > range && dist2 <= range + BLINK_RANGE && hot->hp < atk) {
-        Pos chase_p = parallelChangePos(pos, hot->pos, dist2 - range / 2, false);
-        console->useSkill("Blink", chase_p, punit);     // go
-#ifdef LOG
-        logger << "[skill] chasing by Blink";
-        logger << pos << chase_p << endl;
-#endif
-    } else {
-        console->attack(hot, punit);                    // go
-#ifdef LOG
-        printAtkInfo();
-#endif
-    }
-}
-
-
-void Hero::scouterAttack() {
-    // 没有cd
-    console->attack(hot, punit);        // go
-#ifdef LOG
-    printAtkInfo();
-#endif
-}
-
-
 /***********************************************************/
 
 Hero::Hero(int _id, int _hot, int _tactic) :
@@ -1524,51 +1444,43 @@ Hero::~Hero() {
 
 /*************************Loader***************************/
 
-void Hero::setTarget(Tactic t) {
-    target = t;
-}
-
-
-void Hero::HeroAct() {
-#ifdef LOG
-    logger << endl;
-    logger << "@Act overview:" << endl;
-    logger << punit->name << "(" << id << "):" << endl;
-    logger << ">> Decide to: " << endl;
-    long start = clock();
-#endif
-    // todo
-    // 逃跑
+void Hero::Emergency() {
     if (timeToFlee()) {
         fastFlee();
         return;
     }
 
-    // 不得离开目标矿太远
-    if (dis2(target, pos) > BATTLE_RANGE || hot == nullptr) {
+    if (outOfField() || hot == nullptr) {
         justMove();
         return;
-    } else {
-        switch (type) {
-            case 3:
-                hammerguardAttack();
-                break;
-            case 4:
-                masterAttack();
-                break;
-            case 5:
-                berserkerAttack();
-                break;
-            case 6:
-                scouterAttack();
-                break;
-            default:
-                break;
-        }
     }
+
+    if (!can_skill && !can_attack) {
+        cdWalk();
+        return;
+    }
+}
+
+
+void Hero::Attack() {
+    console->attack(hot, punit);
 #ifdef LOG
-    logger << ">> this hero consumed: " << endl;
-    stopClock(start);
+    printAtkInfo();
+#endif
+}
+
+
+void Hero::HeroAct() {
+    Emergency();
+    Attack();
+}
+
+
+void Hero::justMove() {
+    console->move(target, punit);
+#ifdef LOG
+    logger << "[mov] move to ";
+    logger << target << endl;
 #endif
 }
 
@@ -1609,25 +1521,213 @@ void Hero::printAtkInfo() const {
 /************************************************************
  * Implementation: class HammerGuard
  ************************************************************/
+// protected
 
+bool HammerGuard::timeToSkill() {
+    // toedit 也许需要策略呢
+    return true;
+}
+
+
+// public
+
+HammerGuard::HammerGuard(int _id, int _hot, int _tactic) : Hero(_id, _hot, _tactic) {}
+
+
+void HammerGuard::Attack() {
+#ifdef LOG
+    logger << ">> Hammerguard (" << id << ")" << endl;
+#endif
+
+    // 技能攻击
+    if (can_skill && timeToSkill()) {
+        if (dis2(pos, hot->pos) < HAMMERATTACK_RANGE) {
+            console->useSkill("HammerAttack", hot, punit);  // go
+#ifdef LOG
+            logger << "[skill] HammerAttack at:";
+            printAtkInfo();
+#endif
+            return;
+        }
+    }
+
+    // 普通攻击
+    Hero::Attack();
+}
 
 
 
 /************************************************************
  * Implementation: class Berserker
  ************************************************************/
+// protected
+
+
+// public
+Berserker::Berserker(int _id, int _hot, int _tactic) :
+        Hero(_id, _hot, _tactic){ }
+
+
+void Berserker::Attack() {
+    // Sacrifice中
+    if (punit->findBuff("WinOrDie") != nullptr && can_attack) {
+        Hero::Attack();
+        return;
+    }
+
+    if (timeToSkill()) {
+        console->useSkill("Sacrifice", hot, punit);
+#ifdef LOG
+        logger << "[skill] Sacrifce" << endl;
+#endif
+    } else {
+        Hero::Attack();
+    }
+}
 
 
 
 /************************************************************
  * Implementation: class Master
  ************************************************************/
+// protected
+
+bool Master::timeToSkill() {
+    /*
+     * 仅在进攻时进行判断
+     */
+    int dist2 = dis2(hot->pos, pos);
+    return (dist2 > range && dist2 <= range + BLINK_RANGE && hot->hp < atk);
+}
+
+
+void Master::fastFlee() {
+    if (can_skill) {
+        console->useSkill("Blink", blinkTarget(false), punit);
+    } else {
+        Hero::fastFlee();
+    }
+
+}
+
+
+Pos Master::blinkTarget(bool chase) {
+    // 进攻型
+    int dist2 = dis2(hot->pos, pos);
+    if (chase) {
+        Pos chase_p = parallelChangePos(pos, hot->pos, dist2 - range / 2, false);
+        return chase_p;
+    } else {
+        Pos flee_p = parallelChangePos(pos, hot->pos, BLINK_RANGE, true);
+        return flee_p;
+    }
+}
+
+
+
+// public
+
+Master::Master(int _id, int _hot, int _tactic) :
+        Hero(_id, _hot, _tactic){ }
+
+
+void Master::Emergency() {
+    if (Hero::timeToFlee()) {
+        fastFlee();
+        return;
+    }
+
+    if (outOfField() || hot == nullptr) {
+        Hero::justMove();
+        return;
+    }
+
+    if (!can_skill && !can_attack) {
+        Hero::cdWalk();
+        return;
+    }
+}
+
+
+void Master::Attack() {
+    // 追赶
+    if (timeToSkill()) {
+        console->useSkill("Blink", blinkTarget(), punit);
+#ifdef LOG
+        logger << "[skill] chasing by Blink";
+        logger << pos << blinkTarget() << endl;
+#endif
+    } else {
+        Hero::Attack();
+    }
+}
 
 
 
 /************************************************************
  * Implementation: class Scouter
  ************************************************************/
+// protected
+// toedit 关于释放技能目前设点,在开头更改
+bool Scouter::timeToSkill() {
+    return observeTarget() != Pos(-1, -1);
+}
+
+
+Pos Scouter::observeTarget() {
+    for (int i = 0; i < OBSERVE_POS_N; ++i) {
+        int dist2 = dis2(pos, OBSERVE_POS[i]);
+        if (dist2 < SET_OBSERVER_RANGE) {
+            return OBSERVE_POS[i];
+        }
+    }
+    return Pos(-1, -1);
+}
+
+
+// public
+Scouter::Scouter(int _id, int _hot, int _tactic) :
+        Hero(_id, _hot, _tactic){ }
+
+
+void Scouter::Emergency() {
+    if (Hero::timeToFlee()) {
+        Hero::fastFlee();
+        return;
+    }
+
+    if (outOfField() || hot == nullptr) {
+        justMove();
+        return;
+    }
+
+    if (!can_skill && !can_attack) {
+        Hero::cdWalk();
+        return;
+    }
+}
+
+
+void Scouter::Attack() {
+    Hero::Attack();
+}
+
+
+void Scouter::justMove() {
+    Pos ob_p = observeTarget();
+    if (ob_p != Pos(-1, -1)) {
+        console->useSkill("SetObserver", ob_p, punit);
+#ifdef LOG
+        logger << ">> [skill] set observer at ";
+        logger << ob_p << endl;
+#endif
+    } else {
+        Hero::justMove();
+    }
+}
+
+
+
 
 
 
