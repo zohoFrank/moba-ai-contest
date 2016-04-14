@@ -12,34 +12,38 @@ static Console *console;
 static ofstream print("empty_log.txt");
 static map<int, PUnit*> friends;
 
+static int BUY_RANK = 42314132;
+static const char *HERO_NAME[] = {"Hammerguard", "Master", "Berserker", "Scouter"};
+
+static const int N = 7;
+static int scouters[] = {3, 4, 2, 0, 1, 5, 6};
+static int now_s = 0;
+
 
 void player_ai(const PMap &map, const PPlayerInfo &info, PCommand &cmd) {
-    print << "=======" << endl;
+    console = new Console(map, info, cmd);
 
-    Console *console = new Console(map, info, cmd);
+    console->chooseHero(HERO_NAME[0]);
 
-    console->chooseHero("Master");
     UnitFilter filter;
     filter.setAvoidFilter("MilitaryBase", "a");
-    vector<PUnit *> current_friends = console->friendlyUnits();
+    filter.setAvoidFilter("Observer", "w");
+    vector<PUnit *> friends = console->friendlyUnits(filter);
 
-    if (current_friends.empty()) return;
+    if (!friends.empty()) {
+        for (int i = 0; i < friends.size(); ++i) {
+            PUnit *pu = friends[i];
+            console->selectUnit(pu);
 
-    for (int i = 0; i < current_friends.size(); ++i) {
-        PUnit *punit = current_friends[i];
-        int id = punit->id;
-        friends[id] = punit;
+            if (now_s < N) {
+                console->move(MINE_POS[scouters[now_s]]);
+                UnitFilter mine_f;
+                mine_f.setAreaFilter(new Circle(MINE_POS[scouters[now_s]], 20), "a");
+                mine_f.setTypeFilter("Mine", "a");
+                vector<PUnit *> mines = console->enemyUnits(mine_f);
+                if (!mines.empty())
+                    now_s++;
+            }
+        }
     }
-
-    for (auto miter = friends.begin(); miter != friends.end(); ++miter) {
-        int id_test = (*miter).first;
-        console->move(MINE_POS[0], friends[id_test]);
-//        console->move(MINE_POS[0], console->getUnit(id_test));
-    }
-
-    friends.clear();
-    print << "********" << endl << endl;
 }
-
-
-
