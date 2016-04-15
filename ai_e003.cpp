@@ -70,6 +70,8 @@ static const int CLEAN_NUMS = 2;            // 超过最多保留记录后,一�
 static const double HP_ALERT = 0.2;         // 血量预警百分比
 static const int BATTLE_RANGE = 625;        // 战区范围
 
+// Squad
+static const int MEMBER_LIMIT = 4;          // 小队最多人数
 
 /************************************************************
  * Real-time sharing values
@@ -114,20 +116,28 @@ static int Situation = 0;                       // 0-HOLD_TILL是僵持,负数�
 // 继承上一轮
 static int HotId = -1;                          // 储存的hot id
 static Tactic Target = MINE_POS[0];             // 储存的targets
-// todo
-static const int SQUAD_N = 8;                   // 小队数量 todo 三个小队三种类型任务
+
+// Scouting info
+int LastSeenRound[TAC_TARGETS_N] = {};          // 记录上次观测到的回合数
+int EnemiesN[TAC_TARGETS_N] = {};               // 记录上次观测时各矿区人数
+
+// Squad settings
+static const int SQUAD_N = 8;                   // 小队数量
 static int SquadTargets[SQUAD_N] = {};          // 小队战术id
 static int SquadHots[SQUAD_N] = {};             // 小队热点id
+static int MemberN[SQUAD_N] = {};               // todo 计算得到的各队人数
+
+// Squad list
 static AssaultSquad AllSquads[SQUAD_N] = {
-        MainCarrier(0, 0, TCounter),            // type0 任务:主力攻击
-        MainCarrier(0, 0, TCounter),            // type0
-        MainCarrier(0, 0, TCounter),            // type0
-        MineDigger(0, 0, TCounter),             // type1 任务:挖矿
-        MineDigger(0, 0, TCounter),             // type1
-        MineDigger(0, 0, TCounter),             // type1
-        BattleScouter(0, 0, TCounter),          // type2 任务:巡查
-        BattleScouter(0, 0, TCounter)           // type2
-};                                              // 所有小队,默认初始化后需要调整参数
+        MainCarrier(),            // type0 任务:主力攻击
+        MainCarrier(),            // type0
+        MainCarrier(),            // type0
+        MineDigger(),             // type1 任务:挖矿
+        MineDigger(),             // type1
+        MineDigger(),             // type1
+        BattleScouter(),          // type2 任务:巡查
+        BattleScouter()           // type2
+};                                // 所有小队,默认初始化后需要调整参数
 
 
 
@@ -181,6 +191,7 @@ bool justBeAttacked(PUnit *test);
 
 double surviveRounds(PUnit *host, PUnit *guest);    // 计算存活轮数差:host - guest
 PUnit *findID(vector<PUnit *> units, int _id);
+Hero *getHero(int _id);                             // todo 获取封装的英雄
 
 // ============== Evaluation ===================
 int teamAtk(vector<PUnit *> vct);
@@ -195,6 +206,7 @@ double unitAtkScore(PUnit *pu);                     // todo 单位进攻评估
 // 全局指挥官,分析形势,买活,升级,召回等,也充当本方base角色
 // 更新不同战区信息,units可以领任务,然后形成team
 // global_state: inferior, equal, superior
+// todo 缺少一个判断或者参数,分配各小队人数的时候作为参考
 class Commander {
 private:
     vector<PUnit *> sector_en;
@@ -207,8 +219,10 @@ protected:
     void getUnits();                                // 获取单位信息
 
     // tactics 顺序不能错!
-    void lockSquadTarget();                         // 指定小队目标
     void makeHeroes();                              // 构造英雄
+    void updateSquad();                             // 更新小队信息
+    void distributeHeroes();                        // todo 更新小队后,视情况调整英雄分配
+    void lockSquadTarget();                         // 指定小队目标
 
     // base actions
     void baseAttack();                              // 基地攻击
@@ -239,31 +253,41 @@ public:
 // 突击小队
 class AssaultSquad {
 private:
-    int member_n;                       // 成员人数
+    int type;                           // 根据类的类型直接构造时赋值,不变更
+
+    vector<int> member_id;              // 成员id,便于储存和查询
     int target_id;                      // 战术编号:0-6矿,10-11基地
     int t_counter;                      // 战术倒计时
 
-    int hot_id;                         // 热点对象id
-
-    vector<int> member_id;              // 成员id,便于储存和查询
+    // to update
     vector<Hero *> members;             // 成员指针,便于调用
     vector<Pos> stand;                  // 站位
-    PUnit *hot;                         // 热点对象指针
+    vector<PUnit *> sector_ens;         // 区域敌人
 
+    int hot_id;                         // 热点对象id
+    PUnit *hot;                         // 热点对象指针
 
 protected:
     /*************************HELPER****************************/
+    virtual void clean();               // 由于是静态对象,因此需要清空一些东西
     // construct
-    virtual void lockHot();
+    virtual void getUnits();            // get sector_en
+    virtual void lockHot();             // get hot
+
+    /*************************Actions****************************/
+    virtual void crossBesiege();        // 十字卡位包围,禁止cdWalk()
+    virtual void slipAttack();          // 游动攻击,允许cdWalk()
+    virtual void teamAttack();          // 调用所有成员的攻击接口,即命令成员自由攻击
 
 
 public:
-    AssaultSquad(int _member_n, int _tar_id, int _tcounter);
+    AssaultSquad();
+    AssaultSquad(vector<int> _mem_id, int _tar_id, int _tcounter);
     virtual ~AssaultSquad();
 
     /*************************LOADER****************************/
-    virtual void SquadCommand() = 0;
-    virtual void StoreMe();
+    virtual void updatePointers();
+    virtual void SquadCommand();
 };
 
 
@@ -278,9 +302,9 @@ private:
 
 protected:
 
-
 public:
-    MainCarrier(int _member_n , int _tar_id, int _tcouter);
+    MainCarrier();
+    MainCarrier(vector<int> _mem_id, int _tar_id, int _tcouter);
 
     virtual void SquadCommand();
 };
@@ -293,13 +317,15 @@ class MineDigger : public AssaultSquad {
     friend class Commander;
 
 private:
-
+    int mine_energy;
 
 protected:
     virtual void lockHot() override;
+    void giveUpMine();
 
 public:
-    MineDigger(int _member_n, int _tar_id, int _tcounter);
+    MineDigger();
+    MineDigger(vector<int> _mem_id, int _tar_id, int _tcounter);
 
     virtual void SquadCommand();
 };
@@ -313,14 +339,13 @@ class BattleScouter : public AssaultSquad {
 
 private:
     vector<int> scout_list;                         // 设定侦查list,从队尾开始巡查
-    int last_seen_round[TAC_TARGETS_N] = {};        // 记录上次观测到的回合数
-    int enemies_n[TAC_TARGETS_N] = {};              // 记录上次观测时各矿区人数
 
 protected:
     virtual void lockHot() override;
 
 public:
-    BattleScouter(int _member_n, int _tar_id, int _tcounter);
+    BattleScouter();
+    BattleScouter(vector<int> _mem_id, int _tar_id, int _tcounter, vector<int> scout_list);
 
     virtual void SquadCommand();
 };
@@ -333,6 +358,9 @@ public:
 // 重新封装PUnit数据,便于数据储存
 class Hero {
     friend void printHeroList(vector<Hero *> units);
+    friend class Commander;
+    friend class AssaultSquad;
+
 protected:
     int id, target_id, hot_id;
     int round;                                  // 便于区分
@@ -346,6 +374,7 @@ protected:
 
     bool can_skill;
     bool can_attack;
+    bool besiege;                               // 抵近攻击/包围攻击,需要小队设置
 
     /*********************************************************/
     virtual PUnit *nearestEnemy() const;
@@ -362,7 +391,7 @@ protected:
     // 仅move
     virtual void cdWalk();                              // cd间的躲避步伐
     virtual void fastFlee();                            // 快速逃窜步伐
-    virtual void justMove();                                // 一般移动接口
+    virtual void justMove();                            // 一般移动接口
 
 public:
     /**********************************************************/
@@ -374,7 +403,7 @@ public:
 
     /*************************Loader***************************/
     // 动作集成
-    virtual void Emergency();                           // 一般紧急动作接口 (排除:需要逃跑,离开战场,没有攻击对象,同时-不能释放技能且不能进攻)
+    virtual void Emergency();              // 一般紧急动作接口 (排除:需要逃跑,离开战场,没有攻击对象,同时-不能释放技能且不能进攻)
     virtual void Attack();                              // 一般攻击接口
 
     // 统一调用接口
@@ -398,6 +427,7 @@ protected:
 
 public:
     HammerGuard(int _id, int _hot = -1, int _tactic = 0);
+    HammerGuard(PUnit *me, PUnit *hot = nullptr, int t_id = 0);
 
     virtual void Attack() override;
 };
@@ -415,6 +445,7 @@ protected:
 
 public:
     Berserker(int _id, int _hot = -1, int _tactic = 0);
+    Berserker(PUnit *me, PUnit *hot = nullptr, int t_id = 0);
 
     virtual void Attack() override;
 };
@@ -434,6 +465,7 @@ protected:
 
 public:
     Master(int _id, int _hot = -1, int _tactic = 0);
+    Master(PUnit *me, PUnit *hot = nullptr, int t_id = 0);
 
     virtual void Emergency() override;
     virtual void Attack() override;
@@ -454,6 +486,7 @@ protected:
 
 public:
     Scouter(int _id, int _hot = -1, int _tactic = 0);
+    Scouter(PUnit *me, PUnit *hot = nullptr, int t_id = 0);
 
     virtual void Emergency() override;
     virtual void Attack() override;
@@ -935,101 +968,6 @@ void Commander::getUnits() {
 
 /*************************Tactics**************************/
 // todo 需要修改的bug函数们
-void Commander::lockHot() {     // toedit 主要策略点
-    /*
-     * @优先级:
-     * WinOrDie
-     * WaitRevive
-     * 最弱单位
-     */
-
-    UnitFilter filter;
-    filter.setAreaFilter(new Circle(Target, BATTLE_RANGE), "a");
-    filter.setAvoidFilter("Observer", "a");
-    filter.setAvoidFilter("Mine", "w");
-    filter.setHpFilter(1, 100000);
-
-    // 根据战术目标,设定打击单位范围
-    if (Target != MINE_POS[0]) {
-        // 攻击其他矿时还攻击野怪/军事基地
-        sector_en = console->enemyUnits(filter);
-    } else {
-        // 攻击中矿时仅攻击对手
-        filter.setCampFilter(enemyCamp());
-        sector_en = console->enemyUnits(filter);
-    }
-
-    // 用迭代器遍历并删除指定元素 - 尸体
-    for (auto i = sector_en.begin(); i != sector_en.end(); ) {
-        if (hasBuff(*i, "Reviving"))
-            i = sector_en.erase(i);
-        else
-            i++;
-    }
-
-    if (sector_en.size() == 0) {
-        hot = nullptr;
-        HotId = -1;
-        return;
-    }
-
-    vector<PUnit *> win_or_die;
-    vector<PUnit *> wait_revive;
-
-    // 寻找最弱单位
-    int index = -1;
-    double min = INT_MAX;
-    // 特殊buff
-    int _sz = (int) sector_en.size();
-    for (int i = 0; i < _sz; ++i) {
-        PUnit *en = sector_en[i];
-        // WinOrDie
-        if (hasBuff(en, "WinOrDie")) {
-            win_or_die.push_back(en);
-        }
-        // WaitRevive
-        if (hasBuff(en, "WaitRevive")) {
-            wait_revive.push_back(en);
-        }
-
-        // 最弱
-        double score = unitDefScore(sector_en[i]);
-        if (score < min) {
-            index = i;
-            min = score;
-        }
-    }
-
-    /* 结算 */
-    // 特殊buff
-    if (!win_or_die.empty()) {
-        hot = win_or_die[0];
-        HotId = hot->id;
-        return;
-    }
-    if (!wait_revive.empty()) {
-        hot = wait_revive[0];
-        HotId = hot->id;
-        return;
-    }
-
-    // 继承
-    PUnit *last_hot = findID(sector_en, HotId);
-    if (last_hot != nullptr) {
-        hot = last_hot;
-        return;
-    }
-
-    // 最弱
-    try {
-        hot = sector_en[index];
-        HotId = hot->id;
-    } catch (exception &e) {    // index = -1
-        hot = nullptr;
-        HotId = -1;
-    }
-
-}
 
 
 void Commander::lockTarget() {
@@ -1118,7 +1056,35 @@ void Commander::lockTarget() {
 void Commander::makeHeroes() {
     int _sz = (int) cur_friends.size();
     for (int i = 0; i < _sz; ++i) {
-        heroes.push_back(new Hero(cur_friends[i], hot, Target));
+        PUnit *unit = cur_friends[i];
+        Hero *hero = nullptr;
+        switch (unit->typeId) {
+            case 3:
+                hero = new HammerGuard(unit, nullptr, 0);
+                break;
+            case 4:
+                hero = new Master(unit, nullptr, 0);
+                break;
+            case 5:
+                hero = new Berserker(unit, nullptr, 0);
+                break;
+            case 6:
+                hero = new Scouter(unit, nullptr, 0);
+                break;
+            default:
+#ifdef LOG
+                logger << "[ERRO] Friend enemy's type not found" << endl;
+#endif
+                break;
+        }
+        heroes.push_back(hero);
+    }
+}
+
+
+void Commander::updateSquad() {
+    for (int i = 0; i < SQUAD_N; ++i) {
+        AllSquads[i].updatePointers();
     }
 }
 
@@ -1256,15 +1222,182 @@ void Commander::StoreAndClean() {
 }
 
 
+
 /************************************************************
  * Implementation: class AssaultSquad
  ************************************************************/
 
+/*************************HELPER****************************/
+
+void AssaultSquad::clean() {
+    sector_ens.clear();
+    members.clear();
+    stand.clear();
+    hot = nullptr;
+}
+
+void AssaultSquad::getUnits() {
+    UnitFilter filter;
+    filter.setAreaFilter(new Circle(Target, BATTLE_RANGE), "a");
+    filter.setAvoidFilter("Observer", "a");
+    filter.setAvoidFilter("Mine", "w");
+    filter.setHpFilter(1, 100000);
+
+    // 根据战术目标,设定打击单位范围
+    if (Target != MINE_POS[0]) {
+        // 攻击其他矿时还攻击野怪/军事基地
+        sector_ens = console->enemyUnits(filter);
+    } else {
+        // 攻击中矿时仅攻击对手
+        filter.setCampFilter(enemyCamp());
+        sector_ens = console->enemyUnits(filter);
+    }
+
+    // 用迭代器遍历并删除指定元素 - 尸体
+    for (auto i = sector_ens.begin(); i != sector_ens.end(); ) {
+        if (hasBuff(*i, "Reviving"))
+            i = sector_ens.erase(i);
+        else
+            i++;
+    }
+}
 
 
+void AssaultSquad::lockHot() {
+    /*
+     * @优先级:
+     * WinOrDie
+     * WaitRevive
+     * 最弱单位
+     */
+
+    if (sector_ens.size() == 0) {
+        hot = nullptr;
+        hot_id = -1;
+        return;
+    }
+
+    vector<PUnit *> win_or_die;
+    vector<PUnit *> wait_revive;
+
+    // 寻找最弱单位
+    int index = -1;
+    double min = INT_MAX;
+    // 特殊buff
+    int _sz = (int) sector_ens.size();
+    for (int i = 0; i < _sz; ++i) {
+        PUnit *en = sector_ens[i];
+        // WinOrDie
+        if (hasBuff(en, "WinOrDie")) {
+            win_or_die.push_back(en);
+        }
+        // WaitRevive
+        if (hasBuff(en, "WaitRevive")) {
+            wait_revive.push_back(en);
+        }
+
+        // 最弱
+        double score = unitDefScore(sector_ens[i]);
+        if (score < min) {
+            index = i;
+            min = score;
+        }
+    }
+
+    /* 结算 */
+    // 特殊buff
+    if (!win_or_die.empty()) {
+        hot = win_or_die[0];
+        hot_id = hot->id;
+        return;
+    }
+    if (!wait_revive.empty()) {
+        hot = wait_revive[0];
+        hot_id = hot->id;
+        return;
+    }
+
+    // 继承
+    PUnit *last_hot = findID(sector_ens, hot_id);
+    if (last_hot != nullptr) {
+        hot = last_hot;
+        return;
+    }
+
+    // 最弱
+    if (index == -1) {
+        hot = nullptr;
+        hot_id = -1;
+    } else {
+        hot = sector_ens[index];
+        hot_id = hot->id;
+    }
+}
 
 
+AssaultSquad::AssaultSquad(vector<int> _mem_id, int _tar_id, int _tcounter) {
+    // type未指定
+    member_id = _mem_id;
+    target_id = _tar_id;
+    t_counter = _tcounter;
 
+    updatePointers();
+}
+
+
+AssaultSquad::AssaultSquad() {
+    vector<int> empty;
+    empty.clear();
+    AssaultSquad(empty, 0, TCounter);
+}
+
+
+AssaultSquad::~AssaultSquad() {
+    clean();
+}
+
+
+/*************************LOADER****************************/
+
+void AssaultSquad::updatePointers() {
+    clean();
+    // members
+    for (int i = 0; i < member_id.size(); ++i) {
+        members.push_back(getHero(member_id[i]));
+    }
+
+    // stand
+    for (int j = 0; j < members.size(); ++j) {
+        Pos p = members[j]->punit->pos;
+        stand.push_back(p);
+    }
+
+    // hot/hot_id
+    getUnits();
+    lockHot();
+}
+
+
+void AssaultSquad::SquadCommand() {
+    crossBesiege();
+    teamAttack();
+}
+
+
+/************************************************************
+ * Implementation: class MainCarrier
+ ************************************************************/
+
+MainCarrier::MainCarrier(vector<int> _mem_id, int _tar_id, int _tcouter)
+        : AssaultSquad(_mem_id, _tar_id, _tcouter) {
+    situation = 0;
+}
+
+MainCarrier::MainCarrier() {
+    vector<int> empty;
+    empty.clear();
+    MainCarrier(empty, 0, TCounter);
+}
 
 
 
@@ -1410,6 +1543,7 @@ Hero::Hero(int _id, int _hot, int _tactic) :
 
     can_skill = punit->canUseSkill(SKILL_NAME[punit->typeId + 5]);
     can_attack = punit->canUseSkill("Attack");
+    besiege = true;
 }
 
 
@@ -1439,6 +1573,7 @@ Hero::Hero(PUnit *me, PUnit *hot, int t_id) :
 Hero::~Hero() {
     punit = nullptr;
     hot = nullptr;
+    Hero(-1, -1, 0);
 }
 
 
@@ -1455,9 +1590,11 @@ void Hero::Emergency() {
         return;
     }
 
-    if (!can_skill && !can_attack) {
-        cdWalk();
-        return;
+    if (!besiege) {
+        if (!can_skill && !can_attack) {
+            cdWalk();
+            return;
+        }
     }
 }
 
@@ -1532,6 +1669,9 @@ bool HammerGuard::timeToSkill() {
 // public
 
 HammerGuard::HammerGuard(int _id, int _hot, int _tactic) : Hero(_id, _hot, _tactic) {}
+
+
+HammerGuard::HammerGuard(PUnit *me, PUnit *hot, int t_id) : Hero(me, hot, t_id) { }
 
 
 void HammerGuard::Attack() {
@@ -1631,6 +1771,10 @@ Master::Master(int _id, int _hot, int _tactic) :
         Hero(_id, _hot, _tactic){ }
 
 
+Master::Master(PUnit *me, PUnit *hot, int t_id) :
+        Hero(me, hot, t_id) { }
+
+
 void Master::Emergency() {
     if (Hero::timeToFlee()) {
         fastFlee();
@@ -1642,9 +1786,11 @@ void Master::Emergency() {
         return;
     }
 
-    if (!can_skill && !can_attack) {
-        Hero::cdWalk();
-        return;
+    if (!besiege) {
+        if (!can_skill && !can_attack) {
+            cdWalk();
+            return;
+        }
     }
 }
 
@@ -1690,6 +1836,10 @@ Scouter::Scouter(int _id, int _hot, int _tactic) :
         Hero(_id, _hot, _tactic){ }
 
 
+Scouter::Scouter(PUnit *me, PUnit *hot, int t_id) :
+        Hero(me, hot, t_id) { }
+
+
 void Scouter::Emergency() {
     if (Hero::timeToFlee()) {
         Hero::fastFlee();
@@ -1701,9 +1851,11 @@ void Scouter::Emergency() {
         return;
     }
 
-    if (!can_skill && !can_attack) {
-        Hero::cdWalk();
-        return;
+    if (!besiege) {
+        if (!can_skill && !can_attack) {
+            cdWalk();
+            return;
+        }
     }
 }
 
@@ -1733,11 +1885,17 @@ void Scouter::justMove() {
 
 /*
  * todo 要更改的内容
+ * 1. 十字卡位
+ * 2. 致命一击
+ *
  * 1. 小队模式: 走位/队形...
  * 2. cdWalk
  * 3. Berserker的致命一击
 // * 5. buyLevel, buyNew, 对部分单位进行召回升级callBack, 钱过多时进行买活buyLife
  *
+ * 战术:
+ * 根据发展阶段定战术?
+ * 根据相对实力定战术?
  *
  * temp:
  * 对抗偷基地流
