@@ -30,12 +30,14 @@ class MainCarrier; class MineDigger; class BattleScouter;
 /************************************************************
  * Const values
  ************************************************************/
+static const int TAC_TARGETS_N = 9;         // 7个矿+2个基地
+static const int MINE_NUM_SHIFT = 5;        // 编号偏移
+
 static const int HERO_COST[] = {
         NEW_HAMMERGUARD_COST, NEW_MASTER_COST, NEW_BERSERKER_COST, NEW_SCOUTER_COST,
 };
 static const char *HERO_NAME[] = {"Hammerguard", "Master", "Berserker", "Scouter"};
 
-static const int TAC_TARGETS_N = 9;         // 7个矿+2个基地
 static const Tactic TACTICS[] = {
         MINE_POS[0], MINE_POS[1], MINE_POS[2], MINE_POS[3],
         MINE_POS[4], MINE_POS[5], MINE_POS[6],
@@ -127,14 +129,14 @@ static vector<int> ScouterList;                 // 侦查目标列表
 
 // Squad list
 static AssaultSquad AllSquads[SQUAD_N] = {
-        MainCarrier(),            // type0 任务:主力攻击
-        MainCarrier(),            // type0
-        MainCarrier(),            // type0
-        MineDigger(),             // type1 任务:挖矿
-        MineDigger(),             // type1
-        MineDigger(),             // type1
-        BattleScouter(),          // type2 任务:巡查
-        BattleScouter()           // type2
+        MainCarrier(0),            // type0 任务:主力攻击
+        MainCarrier(1),            // type0
+        MainCarrier(2),            // type0
+        MineDigger(3),             // type1 任务:挖矿
+        MineDigger(4),             // type1
+        MineDigger(5),             // type1
+        BattleScouter(6),          // type2 任务:巡查
+        BattleScouter(7)           // type2
 };                                // 所有小队,默认初始化后需要调整参数
 
 
@@ -216,7 +218,6 @@ protected:
     void getUnits();                                // 获取单位信息
 
     // tactics 顺序不能错!
-    void makeHeroes();                              // fixme 需要删除
     void updateSquad();                             // 更新小队信息
     void lockSquadTarget();                         // 指定小队目标
     void distributeHeroes();                        // todo 更新小队后,视情况调整英雄分配
@@ -249,8 +250,10 @@ public:
  ************************************************************/
 // 突击小队
 class AssaultSquad {
-private:
-    int id;                             // 小队编号
+public:
+    int id, type;                       // 小队编号
+    int battle_range;                   // 作战半径
+    int situation;                      // 状况
 
     // get from commander
     vector<int> member_id;              // 成员id,便于储存和查询
@@ -265,21 +268,19 @@ private:
     int hot_id;                         // 热点对象id
     PUnit *hot;                         // 热点对象指针
 
-protected:
     /*************************HELPER****************************/
     virtual void clean();               // 静态对象,每回合开始需要重置一些东西
     // construct
+    virtual void setBesiege();          // 设置小队/成员的besiege标志
     virtual void getEnemy();            // get sector_en
     virtual void getAllCmdInfo();       // 从全局变量获得信息
     virtual void lockHot();             // get hot
     virtual void makeHeroes();          // make heroes
+    virtual bool evaluateSituation() = 0;   // 评估situation,+ postive, - negative
 
     /*************************Actions****************************/
     virtual void crossBesiege();        // 十字卡位包围准备
     virtual void slipAttack();          // 游动攻击准备
-
-    /*************************Cmd load****************************/
-    virtual void setBesiege();          // 设置小队/成员的besiege标志
 
 public:
     AssaultSquad(int _id);
@@ -295,17 +296,10 @@ public:
 /*****************************Main Carrier*******************************/
 // 主力战队
 class MainCarrier : public AssaultSquad {
-    friend class Commander;
-
-private:
-    int situation;
-
-protected:
-
 public:
-    MainCarrier();
+    MainCarrier(int _id);
 
-    virtual void SquadCommand();
+    virtual bool evaluateSituation() override;
 };
 
 
@@ -313,19 +307,14 @@ public:
 /*****************************Mine Digger*******************************/
 // 挖矿小队
 class MineDigger : public AssaultSquad {
-    friend class Commander;
-
-private:
+public:
     int mine_energy;
 
-protected:
-    virtual void lockHot() override;
-    void giveUpMine();
+    /**********************************************************/
 
-public:
-    MineDigger();
+    MineDigger(int _id);
 
-    virtual void SquadCommand();
+    virtual bool evaluateSituation() override;
 };
 
 
@@ -333,15 +322,12 @@ public:
 /*****************************Battle Scouter*******************************/
 // 侦查小队
 class BattleScouter : public AssaultSquad {
-    friend class Commander;
-
-protected:
+public:
     virtual void lockHot() override;
 
-public:
-    BattleScouter();
+    BattleScouter(int _id);
 
-    virtual void SquadCommand();
+    virtual bool evaluateSituation() override;
 };
 
 
@@ -351,12 +337,7 @@ public:
  ************************************************************/
 // 重新封装PUnit数据,便于数据储存
 class Hero {
-    friend Hero *getHero(int _id);
-    friend void printHeroList(vector<Hero *> units);
-    friend class Commander;
-    friend class AssaultSquad;
-
-protected:
+public:
     int id, target_id, hot_id;
     int round;                                  // 便于区分
     /************************一次性调用*************************/
@@ -416,7 +397,7 @@ public:
 
 /*****************************Hammerguard*******************************/
 class HammerGuard : public Hero {
-protected:
+public:
     // override
     virtual bool timeToSkill() override;
 
@@ -431,11 +412,10 @@ public:
 
 /******************************Berserker********************************/
 class Berserker : public Hero {
-protected:
+public:
     // override
     virtual bool timeToSkill() override;
 
-public:
     Berserker(int _id, int _hot = -1, int _tactic = 0);
     Berserker(PUnit *me, PUnit *hot = nullptr, int t_id = 0);
 
@@ -446,8 +426,7 @@ public:
 
 /*******************************Master*********************************/
 class Master : public Hero {
-
-protected:
+public:
     // override
     virtual bool timeToSkill() override;
     virtual void fastFlee() override;
@@ -455,7 +434,6 @@ protected:
     // my methods
     Pos blinkTarget(bool chase = true);                                      // 闪烁位置
 
-public:
     Master(int _id, int _hot = -1, int _tactic = 0);
     Master(PUnit *me, PUnit *hot = nullptr, int t_id = 0);
 
@@ -467,16 +445,13 @@ public:
 
 /******************************Scouter********************************/
 class Scouter : public Hero {
-
-protected:
+public:
     // override
     virtual bool timeToSkill() override;
 
     // my methods
     Pos observeTarget();                                    // 监视者设置位置
-//    Pos stepBackwards();                                    // 退后设置
 
-public:
     Scouter(int _id, int _hot = -1, int _tactic = 0);
     Scouter(PUnit *me, PUnit *hot = nullptr, int t_id = 0);
 
@@ -880,7 +855,6 @@ Commander::Commander() {
 
 
 Commander::~Commander() {
-    heroes.clear();
     // PUnit*不能释放!
     releaseVector(cur_friends);
     base = nullptr;
@@ -888,7 +862,6 @@ Commander::~Commander() {
     en_base = nullptr;
     releaseVector(vi_mines);
     releaseVector(vi_monsters);
-    clearOldInfo(StrHeroes);
 }
 
 /**************************Helpers**************************/
@@ -1039,35 +1012,6 @@ void Commander::lockTarget() {
 }
 
 
-void Commander::makeHeroes() {
-    int _sz = (int) cur_friends.size();
-    for (int i = 0; i < _sz; ++i) {
-        PUnit *unit = cur_friends[i];
-        Hero *hero = nullptr;
-        switch (unit->typeId) {
-            case 3:
-                hero = new HammerGuard(unit, nullptr, 0);
-                break;
-            case 4:
-                hero = new Master(unit, nullptr, 0);
-                break;
-            case 5:
-                hero = new Berserker(unit, nullptr, 0);
-                break;
-            case 6:
-                hero = new Scouter(unit, nullptr, 0);
-                break;
-            default:
-#ifdef LOG
-                logger << "[ERRO] Friend enemy's type not found" << endl;
-#endif
-                break;
-        }
-        heroes.push_back(hero);
-    }
-}
-
-
 void Commander::updateSquad() {
     for (int i = 0; i < SQUAD_N; ++i) {
         AllSquads[i].roundUpdate();
@@ -1213,6 +1157,7 @@ void Commander::StoreAndClean() {
 
 void AssaultSquad::clean() {
     sector_ens.clear();
+    member_id.clear();
     members.clear();
     hot = nullptr;
 }
@@ -1226,7 +1171,7 @@ void AssaultSquad::getAllCmdInfo() {
 
 void AssaultSquad::getEnemy() {
     UnitFilter filter;
-    filter.setAreaFilter(new Circle(Target, BATTLE_RANGE), "a");
+    filter.setAreaFilter(new Circle(TACTICS[target_id], battle_range), "a");
     filter.setAvoidFilter("Observer", "a");
     filter.setAvoidFilter("Mine", "w");
     filter.setHpFilter(1, 100000);
@@ -1324,6 +1269,37 @@ void AssaultSquad::lockHot() {
     }
 }
 
+
+void AssaultSquad::makeHeroes() {
+    int _sz = (int) member_id.size();
+    for (int i = 0; i < _sz; ++i) {
+        int hero_id = member_id[i];
+        PUnit *unit = console->getUnit(hero_id);
+        Hero *hero = nullptr;
+        switch (unit->typeId) {
+            case 3:
+                hero = new HammerGuard(unit, hot, target_id);
+                break;
+            case 4:
+                hero = new Master(unit, hot, target_id);
+                break;
+            case 5:
+                hero = new Berserker(unit, hot, target_id);
+                break;
+            case 6:
+                hero = new Scouter(unit, hot, target_id);
+                break;
+            default:
+#ifdef LOG
+                logger << "[ERRO] Friend enemy's type not found" << endl;
+#endif
+                break;
+        }
+        members.push_back(hero);
+    }
+}
+
+
 /*************************Actions****************************/
 
 void AssaultSquad::crossBesiege() {
@@ -1377,6 +1353,7 @@ void AssaultSquad::setBesiege() {
 
 AssaultSquad::AssaultSquad(int _id) {
     id = _id;
+    battle_range = BATTLE_RANGE;
     roundUpdate();
 }
 
@@ -1395,9 +1372,10 @@ void AssaultSquad::roundUpdate() {
 
     // setting
     setBesiege();
-    makeHeroes();
     getEnemy();
     lockHot();
+    makeHeroes();
+    evaluateSituation();
 }
 
 
@@ -1413,6 +1391,46 @@ void AssaultSquad::SquadCommand() {
 /************************************************************
  * Implementation: class MainCarrier
  ************************************************************/
+
+
+MainCarrier::MainCarrier(int _id) : AssaultSquad(_id) {
+    type = 0;
+    situation = 0;
+}
+
+
+
+/************************************************************
+ * Implementation: class MineDigger
+ ************************************************************/
+
+MineDigger::MineDigger(int _id) : AssaultSquad(_id) {
+    type = 1;
+    battle_range = BATTLE_RANGE / 4;        // 作战半径减小一半
+
+    PUnit *mine = console->getUnit(target_id + MINE_NUM_SHIFT);
+    if (mine == nullptr) {
+        mine_energy = 1 << 30;
+    } else {
+        mine_energy = console->unitArg("energy", "c", mine);
+#ifdef LOG
+        logger << ">> Target mine energy: " << mine_energy << endl;
+#endif
+    }
+}
+
+
+
+/************************************************************
+ * Implementation: class BattleScouter
+ ************************************************************/
+
+void BattleScouter::lockHot() {
+    hot == nullptr;
+}
+
+
+BattleScouter::BattleScouter(int _id) : AssaultSquad(_id) { }
 
 
 
@@ -1478,6 +1496,7 @@ bool Hero::timeToFlee() {
 
     return false;
 }
+
 
 bool Hero::outOfField() {
     int dist2 = dis2(pos, target);
