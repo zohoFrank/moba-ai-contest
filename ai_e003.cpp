@@ -90,14 +90,10 @@ const PUnit *en_base;                           // 敌人基地
 vector<PUnit *> vi_mines;                       // 可见矿(矿的位置是默认的,但状态需要可见才能读取)
 vector<PUnit *> vi_monsters;                    // 可见野怪
 
-vector<Hero *> heroes;
-
 
 /************************************************************
  * Storage data
  ************************************************************/
-static vector<vector<Hero>> StrHeroes;          // 储存的英雄
-
 /* 战术核心 */
 // 7个矿顺序依次是 0-中矿,1-8点,2-10点,3-4点,4-2点,5-西北,6-东南
 static int SuperiorTactics[] = {0, 1, 2, 3, 4}; // 优势战术
@@ -121,11 +117,13 @@ static Tactic Target = MINE_POS[0];             // 储存的targets
 int LastSeenRound[TAC_TARGETS_N] = {};          // 记录上次观测到的回合数
 int EnemiesN[TAC_TARGETS_N] = {};               // 记录上次观测时各矿区人数
 
+typedef vector<int> ID_LIST;
 // Squad settings
 static const int SQUAD_N = 8;                   // 小队数量
 static int SquadTargets[SQUAD_N] = {};          // 小队战术id
-static int SquadHots[SQUAD_N] = {};             // 小队热点id
-static int MemberN[SQUAD_N] = {};               // todo 计算得到的各队人数
+static ID_LIST SquadMembers[SQUAD_N] = {};      // 各小队成员安排
+
+static vector<int> ScouterList;                 // 侦查目标列表
 
 // Squad list
 static AssaultSquad AllSquads[SQUAD_N] = {
@@ -191,12 +189,11 @@ bool justBeAttacked(PUnit *test);
 
 double surviveRounds(PUnit *host, PUnit *guest);    // 计算存活轮数差:host - guest
 PUnit *findID(vector<PUnit *> units, int _id);
-Hero *getHero(int _id);                             // todo 获取封装的英雄
 
 // ============== Evaluation ===================
 int teamAtk(vector<PUnit *> vct);
 double unitDefScore(PUnit *pu);                     // 给单位的实际防守力评估
-double unitAtkScore(PUnit *pu);                     // todo 单位进攻评估
+//double unitAtkScore(PUnit *pu);                     // 单位进攻评估
 
 
 
@@ -219,10 +216,10 @@ protected:
     void getUnits();                                // 获取单位信息
 
     // tactics 顺序不能错!
-    void makeHeroes();                              // 构造英雄
+    void makeHeroes();                              // fixme 需要删除
     void updateSquad();                             // 更新小队信息
-    void distributeHeroes();                        // todo 更新小队后,视情况调整英雄分配
     void lockSquadTarget();                         // 指定小队目标
+    void distributeHeroes();                        // todo 更新小队后,视情况调整英雄分配
 
     // base actions
     void baseAttack();                              // 基地攻击
@@ -253,16 +250,16 @@ public:
 // 突击小队
 class AssaultSquad {
 private:
-    int type;                           // 根据类的类型直接构造时赋值,不变更
+    int id;                             // 小队编号
 
+    // get from commander
     vector<int> member_id;              // 成员id,便于储存和查询
     int target_id;                      // 战术编号:0-6矿,10-11基地
 
+    // settings
     bool besiege;                       // 包围攻击,同时设置小队成员的besiege标志
 
-    // to update
     vector<Hero *> members;             // 成员指针,便于调用
-    vector<Pos> stand;                  // 站位
     vector<PUnit *> sector_ens;         // 区域敌人
 
     int hot_id;                         // 热点对象id
@@ -270,10 +267,12 @@ private:
 
 protected:
     /*************************HELPER****************************/
-    virtual void clean();               // 由于是静态对象,因此需要清空一些东西
+    virtual void clean();               // 静态对象,每回合开始需要重置一些东西
     // construct
-    virtual void getUnits();            // get sector_en
+    virtual void getEnemy();            // get sector_en
+    virtual void getAllCmdInfo();       // 从全局变量获得信息
     virtual void lockHot();             // get hot
+    virtual void makeHeroes();          // make heroes
 
     /*************************Actions****************************/
     virtual void crossBesiege();        // 十字卡位包围准备
@@ -281,15 +280,13 @@ protected:
 
     /*************************Cmd load****************************/
     virtual void setBesiege();          // 设置小队/成员的besiege标志
-    virtual void gogogo();              // 小队成员行动
 
 public:
-    AssaultSquad();
-    AssaultSquad(vector<int> _mem_id, int _tar_id);
+    AssaultSquad(int _id);
     virtual ~AssaultSquad();
 
     /*************************LOADER****************************/
-    virtual void updatePointers();
+    virtual void roundUpdate();
     virtual void SquadCommand();        // 每回合调用一次
 };
 
@@ -307,7 +304,6 @@ protected:
 
 public:
     MainCarrier();
-    MainCarrier(vector<int> _mem_id, int _tar_id);
 
     virtual void SquadCommand();
 };
@@ -328,7 +324,6 @@ protected:
 
 public:
     MineDigger();
-    MineDigger(vector<int> _mem_id, int _tar_id);
 
     virtual void SquadCommand();
 };
@@ -340,15 +335,11 @@ public:
 class BattleScouter : public AssaultSquad {
     friend class Commander;
 
-private:
-    vector<int> scout_list;                         // 设定侦查list,从队尾开始巡查
-
 protected:
     virtual void lockHot() override;
 
 public:
     BattleScouter();
-    BattleScouter(vector<int> _mem_id, int _tar_id, vector<int> scout_list);
 
     virtual void SquadCommand();
 };
@@ -360,6 +351,7 @@ public:
  ************************************************************/
 // 重新封装PUnit数据,便于数据储存
 class Hero {
+    friend Hero *getHero(int _id);
     friend void printHeroList(vector<Hero *> units);
     friend class Commander;
     friend class AssaultSquad;
@@ -442,10 +434,6 @@ class Berserker : public Hero {
 protected:
     // override
     virtual bool timeToSkill() override;
-
-    // my
-    virtual bool underFire();                       // berserker在敌人的枪口下
-    virtual void prepareOrAttack();                 // 选择sacrifice准备,或者直接攻击
 
 public:
     Berserker(int _id, int _hot = -1, int _tactic = 0);
@@ -647,13 +635,6 @@ void stopClock(long start) {
 #endif
 
 // algorithms
-void modifyBackupTactic(int *tactics, int size) {
-//    for (int i = 0; i < BakTN; ++i) {
-//
-//    }
-    return;     // todo 决定是否丰富战术
-}
-
 Pos parallelChangePos(
         const Pos &origin,
         const Pos &reference,
@@ -889,11 +870,12 @@ Commander::Commander() {
     // Economy
     Economy = console->gold();
 
-    // 顺序不能错
-    modifyBackupTactic(BackupTactics, BakTN);
     // cur_friends  vi_enemies
     getUnits();
-    // analyze
+    // arrange squads 顺序不能错
+    lockSquadTarget();
+    updateSquad();
+    distributeHeroes();
 }
 
 
@@ -1088,7 +1070,7 @@ void Commander::makeHeroes() {
 
 void Commander::updateSquad() {
     for (int i = 0; i < SQUAD_N; ++i) {
-        AllSquads[i].updatePointers();
+        AllSquads[i].roundUpdate();
     }
 }
 
@@ -1207,14 +1189,10 @@ void Commander::TeamAct() {
     callBack();
     baseAttack();
     spendMoney();
-    // heroes
-    int _sz = (int) heroes.size();
-    for (int i = 0; i < _sz; ++i) {
-        heroes[i]->HeroAct();
+    // squads
+    for (int i = 0; i < SQUAD_N; ++i) {
+        AllSquads->SquadCommand();
     }
-#ifdef LOG
-    printHeroList(heroes);
-#endif
 }
 
 
@@ -1236,12 +1214,17 @@ void Commander::StoreAndClean() {
 void AssaultSquad::clean() {
     sector_ens.clear();
     members.clear();
-    stand.clear();
     hot = nullptr;
 }
 
 
-void AssaultSquad::getUnits() {
+void AssaultSquad::getAllCmdInfo() {
+    member_id = SquadMembers[id];
+    target_id = SquadTargets[id];
+}
+
+
+void AssaultSquad::getEnemy() {
     UnitFilter filter;
     filter.setAreaFilter(new Circle(Target, BATTLE_RANGE), "a");
     filter.setAvoidFilter("Observer", "a");
@@ -1390,31 +1373,11 @@ void AssaultSquad::setBesiege() {
 }
 
 
-void AssaultSquad::gogogo() {
-    if (besiege) {
-        crossBesiege();
-    } else {
-        slipAttack();
-    }
-}
-
-
 // public
 
-AssaultSquad::AssaultSquad(vector<int> _mem_id, int _tar_id) {
-    // type未指定
-    member_id = _mem_id;
-    target_id = _tar_id;
-    besiege = true;
-
-    updatePointers();
-}
-
-
-AssaultSquad::AssaultSquad() {
-    vector<int> empty;
-    empty.clear();
-    AssaultSquad(empty, 0);
+AssaultSquad::AssaultSquad(int _id) {
+    id = _id;
+    roundUpdate();
 }
 
 
@@ -1425,49 +1388,31 @@ AssaultSquad::~AssaultSquad() {
 
 /*************************LOADER****************************/
 
-void AssaultSquad::updatePointers() {
+void AssaultSquad::roundUpdate() {
     clean();
-    // members
-    for (int i = 0; i < member_id.size(); ++i) {
-        members.push_back(getHero(member_id[i]));
-    }
 
-    // stand
-    for (int j = 0; j < members.size(); ++j) {
-        Pos p = members[j]->punit->pos;
-        stand.push_back(p);
-    }
+    getAllCmdInfo();        // target, mem_id
 
-    // hot/hot_id
-    getUnits();
+    // setting
+    setBesiege();
+    makeHeroes();
+    getEnemy();
     lockHot();
 }
 
 
 void AssaultSquad::SquadCommand() {
-    // setting
-    lockHot();
-    setBesiege();
-
-    // action
-    gogogo();
+    if (besiege) {
+        crossBesiege();
+    } else {
+        slipAttack();
+    }
 }
 
 
 /************************************************************
  * Implementation: class MainCarrier
  ************************************************************/
-
-MainCarrier::MainCarrier(vector<int> _mem_id, int _tar_id)
-        : AssaultSquad(_mem_id, _tar_id) {
-    situation = 0;
-}
-
-MainCarrier::MainCarrier() {
-    vector<int> empty;
-    empty.clear();
-    MainCarrier(empty, 0);
-}
 
 
 
@@ -1775,14 +1720,16 @@ void HammerGuard::Attack() {
 // protected
 
 bool Berserker::timeToSkill() {
-    // fixme 还有hot必须在攻击范围内
+    // hot必须在攻击范围内
+    if (!dis2(hot->pos, pos) > range)
+        return false;
 
     // this必须能sacrifice,且至少下一回合能攻击
     if (!can_skill || punit->findSkill("Attack")->cd > 1) {
         return false;
     }
 
-    // hot必须是落单对象 fixme 有问题,因为敌人要攻击的是this,不是hot,跟站位有关
+    // hot必须是落单对象
     for (int i = 0; i < vi_enemies.size(); ++i) {
         PUnit *pu = vi_enemies[i];
         int dist2 = dis2(hot->pos, pu->pos);
@@ -1800,26 +1747,28 @@ bool Berserker::timeToSkill() {
     return true;
 }
 
-
-void Berserker::prepareOrAttack() {
-    // assert: not right time to sacrifice
-    int atk_cd = punit->findSkill("Attack")->cd;
-    int skill_cd = punit->findSkill("Sacrifice")->cd;
-    int interval = atk_cd - skill_cd;
-
-    // todo 考虑:敌人位置圆心,this range半径的 安全+可达点 (可能需要三重循环,考虑精简算法)
-    /*
-     * todo 算法精简的考虑
-     * 1.求可达:两圆是否相交--距离与半径和比较
-     * 2.验证安全:求公共弦(垂直平分线段两点坐标),其垂线段,遍历验证
-     * 3.遍历筛选:仅遍历与敌人圆 相交的其他敌人(两者距离 < range + enemy_speed)
-     * 最不利:可能需要range * range * enemy_size 的次数,最大可达36 * 36 * 8 = 10368次
-     */
-    if (interval < 0 || besiege) {     // 下一次attack前不能sacrifice,或者围攻状态
-        Hero::Attack();
-    }
-
-}
+//void Berserker::prepareOrAttack() {
+//    // assert: not right time to sacrifice
+//    int atk_cd = punit->findSkill("Attack")->cd;
+//    int skill_cd = punit->findSkill("Sacrifice")->cd;
+//    int interval = atk_cd - skill_cd;
+//
+//    // 考虑:敌人位置圆心,this range半径的 安全+可达点 (可能需要三重循环,考虑精简算法)
+//    /*
+//     * 算法精简的考虑
+//     * 1.求可达:两圆是否相交--距离与半径和比较
+//     * 2.验证安全:求公共弦(垂直平分线段两点坐标),其垂线段,遍历验证
+//     * 3.遍历筛选:仅遍历与敌人圆 相交的其他敌人(两者距离 < range + enemy_speed)
+//     * 最不利:可能需要range * range * enemy_size 的次数,最大可达36 * 36 * 8 = 10368次
+//     */
+//    if (interval < 0 || besiege) {     // 下一次attack前不能sacrifice,或者围攻状态
+//        Hero::Attack();
+//        return;
+//    } else {
+//        UnitFilter
+//    }
+//
+//}
 
 
 // public
@@ -1844,7 +1793,7 @@ void Berserker::Attack() {
         logger << "[skill] Sacrifce" << endl;
 #endif
     } else {
-        prepareOrAttack();
+        Hero::Attack();
     }
 }
 
