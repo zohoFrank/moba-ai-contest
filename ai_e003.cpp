@@ -30,6 +30,8 @@ class MainCarrier; class MineDigger; class BattleScouter;
 /************************************************************
  * Const values
  ************************************************************/
+static const int BIG_INT = 1 << 29;
+
 static const int TAC_TARGETS_N = 9;         // 7个矿+2个基地
 static const int MINE_NUM_SHIFT = 5;        // 编号偏移
 
@@ -110,6 +112,7 @@ static int TCounter = StickRounds;              // 设置战术倒计时
 
 // 战局判断
 static int Situation = 0;                       // 0-HOLD_TILL是僵持,负数是失守,>HOLD_TILL是占据
+static const int SCOUT_OK = 9;                  // 侦查完成的最大距离
 
 // 继承上一轮
 static int HotId = -1;                          // 储存的hot id
@@ -254,6 +257,7 @@ public:
     int id, type;                       // 小队编号
     int battle_range;                   // 作战半径
     int situation;                      // 状况
+    int stick_counter;                  // 保持战术的时间
 
     // get from commander
     vector<int> member_id;              // 成员id,便于储存和查询
@@ -263,20 +267,23 @@ public:
     bool besiege;                       // 包围攻击,同时设置小队成员的besiege标志
 
     vector<Hero *> members;             // 成员指针,便于调用
-    vector<PUnit *> sector_ens;         // 区域敌人
+    vector<PUnit *> sector_en;         // 区域敌人
+    vector<PUnit *> sector_f;           // 区域朋友
 
     int hot_id;                         // 热点对象id
     PUnit *hot;                         // 热点对象指针
 
     /*************************HELPER****************************/
     virtual void clean();               // 静态对象,每回合开始需要重置一些东西
+    virtual void resetTacMonitor(int _n = StickRounds);   // 重设计数器/判断器
     // construct
+    virtual void setOthers() = 0;       // 用来给子类设置自身独有的成员变量
     virtual void setBesiege();          // 设置小队/成员的besiege标志
-    virtual void getEnemy();            // get sector_en
+    virtual void getUnits();            // get sector_en sector_f
     virtual void getAllCmdInfo();       // 从全局变量获得信息
     virtual void lockHot();             // get hot
     virtual void makeHeroes();          // make heroes
-    virtual bool evaluateSituation() = 0;   // 评估situation,+ postive, - negative
+    virtual void evaluateSituation() = 0;   // 评估situation,+ postive, - negative
 
     /*************************Actions****************************/
     virtual void crossBesiege();        // 十字卡位包围准备
@@ -299,7 +306,8 @@ class MainCarrier : public AssaultSquad {
 public:
     MainCarrier(int _id);
 
-    virtual bool evaluateSituation() override;
+    virtual void setOthers() override;
+    virtual void evaluateSituation() override;
 };
 
 
@@ -311,10 +319,10 @@ public:
     int mine_energy;
 
     /**********************************************************/
-
     MineDigger(int _id);
 
-    virtual bool evaluateSituation() override;
+    virtual void setOthers() override;
+    virtual void evaluateSituation() override;
 };
 
 
@@ -327,7 +335,8 @@ public:
 
     BattleScouter(int _id);
 
-    virtual bool evaluateSituation() override;
+    virtual void setOthers() override;
+    virtual void evaluateSituation() override;
 };
 
 
@@ -1156,10 +1165,16 @@ void Commander::StoreAndClean() {
 /*************************HELPER****************************/
 
 void AssaultSquad::clean() {
-    sector_ens.clear();
+    sector_en.clear();
     member_id.clear();
     members.clear();
     hot = nullptr;
+}
+
+
+void AssaultSquad::resetTacMonitor(int _n) {
+    stick_counter = _n;
+    situation = 0;
 }
 
 
@@ -1169,7 +1184,7 @@ void AssaultSquad::getAllCmdInfo() {
 }
 
 
-void AssaultSquad::getEnemy() {
+void AssaultSquad::getUnits() {
     UnitFilter filter;
     filter.setAreaFilter(new Circle(TACTICS[target_id], battle_range), "a");
     filter.setAvoidFilter("Observer", "a");
@@ -1179,17 +1194,19 @@ void AssaultSquad::getEnemy() {
     // 根据战术目标,设定打击单位范围
     if (Target != MINE_POS[0]) {
         // 攻击其他矿时还攻击野怪/军事基地
-        sector_ens = console->enemyUnits(filter);
+        sector_en = console->enemyUnits(filter);
     } else {
         // 攻击中矿时仅攻击对手
         filter.setCampFilter(enemyCamp());
-        sector_ens = console->enemyUnits(filter);
+        sector_en = console->enemyUnits(filter);
     }
 
+    sector_f = console->friendlyUnits(filter);
+
     // 用迭代器遍历并删除指定元素 - 尸体
-    for (auto i = sector_ens.begin(); i != sector_ens.end(); ) {
+    for (auto i = sector_en.begin(); i != sector_en.end(); ) {
         if (hasBuff(*i, "Reviving"))
-            i = sector_ens.erase(i);
+            i = sector_en.erase(i);
         else
             i++;
     }
@@ -1206,7 +1223,7 @@ void AssaultSquad::lockHot() {
 
     // todo 由于队形调整浪费时间,需要一直沿用某一hot对象,直到其死亡或逃逸
 
-    if (sector_ens.size() == 0) {
+    if (sector_en.size() == 0) {
         hot = nullptr;
         hot_id = -1;
         return;
@@ -1219,9 +1236,9 @@ void AssaultSquad::lockHot() {
     int index = -1;
     double min = INT_MAX;
     // 特殊buff
-    int _sz = (int) sector_ens.size();
+    int _sz = (int) sector_en.size();
     for (int i = 0; i < _sz; ++i) {
-        PUnit *en = sector_ens[i];
+        PUnit *en = sector_en[i];
         // WinOrDie
         if (hasBuff(en, "WinOrDie")) {
             win_or_die.push_back(en);
@@ -1232,7 +1249,7 @@ void AssaultSquad::lockHot() {
         }
 
         // 最弱
-        double score = unitDefScore(sector_ens[i]);
+        double score = unitDefScore(sector_en[i]);
         if (score < min) {
             index = i;
             min = score;
@@ -1253,7 +1270,7 @@ void AssaultSquad::lockHot() {
     }
 
     // 继承
-    PUnit *last_hot = findID(sector_ens, hot_id);
+    PUnit *last_hot = findID(sector_en, hot_id);
     if (last_hot != nullptr) {
         hot = last_hot;
         return;
@@ -1264,7 +1281,7 @@ void AssaultSquad::lockHot() {
         hot = nullptr;
         hot_id = -1;
     } else {
-        hot = sector_ens[index];
+        hot = sector_en[index];
         hot_id = hot->id;
     }
 }
@@ -1354,6 +1371,7 @@ void AssaultSquad::setBesiege() {
 AssaultSquad::AssaultSquad(int _id) {
     id = _id;
     battle_range = BATTLE_RANGE;
+    stick_counter = StickRounds;
     roundUpdate();
 }
 
@@ -1371,8 +1389,10 @@ void AssaultSquad::roundUpdate() {
     getAllCmdInfo();        // target, mem_id
 
     // setting
+    stick_counter--;
+    setOthers();
     setBesiege();
-    getEnemy();
+    getUnits();
     lockHot();
     makeHeroes();
     evaluateSituation();
@@ -1392,25 +1412,54 @@ void AssaultSquad::SquadCommand() {
  * Implementation: class MainCarrier
  ************************************************************/
 
-
 MainCarrier::MainCarrier(int _id) : AssaultSquad(_id) {
     type = 0;
     situation = 0;
 }
 
 
+void MainCarrier::evaluateSituation() {
+    if (stick_counter > 0) {
+        situation = 0;
+        return;
+    }   // assert: stick_counter <= 0
+
+    int _sz_f = (int) sector_f.size();
+    int _sz_e = (int) sector_en.size();
+
+    // 没有人,negative,扣分
+    if (_sz_f == 0) {
+        situation -= BIG_INT;
+        return;
+    }   // assert: _sz_f != 0
+
+    // 占领了,positive,从0开始+1
+    if (_sz_e == 0) {
+        situation = max(0, ++situation);
+        return;
+    }
+
+    // 胶着且人数不占优,-1
+    if (_sz_e > _sz_f) {
+        situation = min(0, --situation);
+    }
+}
+
 
 /************************************************************
  * Implementation: class MineDigger
  ************************************************************/
 
-MineDigger::MineDigger(int _id) : AssaultSquad(_id) {
+MineDigger::MineDigger(int _id) : AssaultSquad(_id) { }
+
+
+void MineDigger::setOthers() {
     type = 1;
     battle_range = BATTLE_RANGE / 4;        // 作战半径减小一半
 
     PUnit *mine = console->getUnit(target_id + MINE_NUM_SHIFT);
     if (mine == nullptr) {
-        mine_energy = 1 << 30;
+        mine_energy = BIG_INT;
     } else {
         mine_energy = console->unitArg("energy", "c", mine);
 #ifdef LOG
@@ -1419,6 +1468,39 @@ MineDigger::MineDigger(int _id) : AssaultSquad(_id) {
     }
 }
 
+
+void MainCarrier::setOthers() {
+    return;
+}
+
+
+void MineDigger::evaluateSituation() {
+    if (stick_counter > 0) {
+        situation = 0;
+        return;
+    }   // assert: stick_counter <= 0
+
+    int _sz_f = (int) sector_f.size();
+    int _sz_e = (int) sector_en.size();
+
+    // 敌人人数占优或者矿连续没有能量,negative
+    if (_sz_e - _sz_f > 1 || mine_energy < 2) {
+        situation -= BIG_INT;
+        return;
+    }
+
+    // 有monster以外的交战,negative
+    for (int i = 0; i < sector_en.size(); ++i) {
+        if (!sector_en[i]->isWild()) {
+            situation = min(0, --situation);
+        }
+    }
+    return;
+
+    // 否则一直保持采矿状态
+    situation = 0;
+
+}
 
 
 /************************************************************
@@ -1431,6 +1513,34 @@ void BattleScouter::lockHot() {
 
 
 BattleScouter::BattleScouter(int _id) : AssaultSquad(_id) { }
+
+
+void BattleScouter::setOthers() {
+    return;
+}
+
+
+void BattleScouter::evaluateSituation() {
+    if (stick_counter > 0) {
+        situation = 0;
+        return;
+    }   // assert: stick_counter <= 0
+
+    int _sz_f = (int) sector_f.size();
+    int _sz_e = (int) sector_en.size();
+
+    // 一旦对改点观测完成即撤出
+    for (int i = 0; i < members.size(); ++i) {
+        Pos p = members[i]->pos;
+        if (dis2(p, TACTICS[target_id]) < SCOUT_OK) {
+            situation -= BIG_INT;
+            return;
+        }
+    }
+
+    // 否则,继续
+    situation = 0;
+}
 
 
 
