@@ -21,6 +21,7 @@ static int now_s = 0;
 
 
 void player_ai(const PMap &map, const PPlayerInfo &info, PCommand &cmd) {
+
     console = new Console(map, info, cmd);
 
     console->chooseHero(HERO_NAME[0]);
