@@ -2,7 +2,7 @@
 #define LOG
 
 #ifdef LOG
-
+#define TEMP
 #include <ctime>
 #include <fstream>
 #include <iomanip>
@@ -128,7 +128,7 @@ static ID_LIST SquadMembers[SQUAD_N] = {};      // 各小队成员安排
 // Squad list
 static const int SINGLE_MC_LIMIT = 4;           // MC人数限制
 static const int SINGLE_MD_LIMIT = 2;           // MD人数限制
-static vector<AssaultSquad> AllSquads;          // 所有小队,默认初始化后需要调整参数
+static vector<AssaultSquad *> AllSquads;          // 所有小队,默认初始化后需要调整参数
 
 
 
@@ -145,6 +145,8 @@ void printHeroList(vector<Hero> units);
 
 template<typename T>
 void printString(vector<T> vct);      // T重载了<<
+
+void printSquads();                     // print AllSquads/SquadMember/SquadTarget
 #endif
 
 // =============== Basic Algorithms ================
@@ -166,10 +168,6 @@ bool compareLevel(PUnit *a, PUnit *b);
 
 bool operator<(const Pos &a, const Pos &b);
 
-// Handling stored data
-template<typename T>
-void clearOldInfo(vector<T> &vct);                  // 及时清理陈旧储存信息
-
 
 // ============== Game and Units ===================
 // Global
@@ -187,7 +185,6 @@ PUnit *findID(vector<PUnit *> units, int _id);
 // ============== Evaluation ===================
 int teamAtk(vector<PUnit *> vct);
 double unitDefScore(PUnit *pu);                     // 给单位的实际防守力评估
-//double unitAtkScore(PUnit *pu);                     // 单位进攻评估
 
 
 
@@ -264,13 +261,13 @@ public:
     virtual void clean();               // 静态对象,每回合开始需要重置一些东西
     virtual void resetTacMonitor(int _n = StickRounds);   // 重设计数器/判断器
     // construct
-    virtual void setOthers();           // 用来给子类设置自身独有的成员变量
+    virtual void setOthers() = 0;       // 用来给子类设置自身独有的成员变量
     virtual void setBesiege();          // 设置小队/成员的besiege标志
     virtual void getUnits();            // get sector_en sector_f
     virtual void getAllCmdInfo();       // 从全局变量获得信息
     virtual void lockHot();             // get hot
     virtual void makeHeroes();          // make heroes
-    virtual void evaluateSituation();   // 评估situation,+ postive, - negative
+    virtual void evaluateSituation() = 0;   // 评估situation,+ postive, - negative
 
     /*************************Actions****************************/
     virtual void crossBesiege();        // 十字卡位包围准备
@@ -347,6 +344,7 @@ public:
     bool can_skill;
     bool can_attack;
     bool besiege;                               // 抵近攻击/包围攻击,需要小队设置
+    bool emergency;                             // 有紧急情况,不需要继续别的指令
 
     /*********************************************************/
     virtual PUnit *nearestEnemy() const;
@@ -455,10 +453,8 @@ public:
 
 /*#################### MAIN FUNCTION #######################*/
 void player_ai(const PMap &map, const PPlayerInfo &info, PCommand &cmd) {
-    if (Round < 1) {
-        initilize();
-    }
 #ifdef LOG
+    logger << endl << endl;
     logger << "====ROUND " << Round << " STARTS====" << endl;
     logger << "@Economy: " << Economy << endl;
     long start = clock();
@@ -466,6 +462,9 @@ void player_ai(const PMap &map, const PPlayerInfo &info, PCommand &cmd) {
 
     // Create pointers
     console = new Console(map, info, cmd);
+    if (Round < 1) {
+        initilize();
+    }
     commander = new Commander();
 
     // Hero do actions // todo 时间消耗大户
@@ -477,6 +476,8 @@ void player_ai(const PMap &map, const PPlayerInfo &info, PCommand &cmd) {
 #ifdef LOG
     logger << ">> Total" << endl;
     stopClock(start);
+    logger << endl;
+    printSquads();
 #endif
 }
 
@@ -551,6 +552,7 @@ void printHeroList(vector<Hero *> units) {
     logger << left << setw(5) << "DEF";
     logger << left << setw(10) << "POS";
     logger << left << setw(10) << "TAC";
+    logger << left << setw(10) << "HOTID";
     logger << left << setw(10) << "BUFF";
     logger << endl;
     // print content
@@ -565,11 +567,12 @@ void printHeroList(vector<Hero *> units) {
         logger << left << setw(5) << ptr->mp;
         logger << left << setw(5) << ptr->atk;
         logger << left << setw(5) << ptr->def;
-        // POS/TAC
+        // POS/TAC/HOT
         string p = int2str(ptr->pos.x) + "," + int2str(ptr->pos.y);
         logger << left << setw(10) << p;
         string t = int2str(unit->target.x) + "," + int2str(unit->target.y);
         logger << left << setw(10) << t;
+        logger << left << setw(10) << unit->hot_id;
         // BUFF
         vector<PBuff> buff = unit->punit->buffs;
         for (int j = 0; j < buff.size(); ++j) {
@@ -595,7 +598,37 @@ void stopClock(long start) {
     long end = clock();
     double interval = 1.0 * (end - start) / CLOCKS_PER_SEC * 1000;
     logger << "$$ Time Consumed(ms): " << interval << endl;
-    logger << endl << endl;
+}
+
+
+void printSquads() {
+    logger << "@ Squad and Hero info" << endl;
+    if (AllSquads.empty()) {
+        logger << "!! Get empty squads" << endl;
+    }
+
+    // print content
+    for (int i = 0; i < AllSquads.size(); ++i) {
+        // print title
+        logger << left << setw(5) << "TYPE";
+        logger << left << setw(5) << "ID";
+        logger << left << setw(5) << "NO.";
+        logger << left << setw(5) << "SITU";
+        logger << left << setw(7) << "CNTER";
+        logger << left << setw(7) << "BESG";
+        logger << left << setw(7) << "HOTID";
+        logger << left << setw(7) << "TARGET" << endl;
+        logger << left << setw(5) << AllSquads[i]->type;
+        logger << left << setw(5) << AllSquads[i]->id;
+        logger << left << setw(5) << AllSquads[i]->member_id.size();
+        logger << left << setw(5) << AllSquads[i]->situation;
+        logger << left << setw(7) << AllSquads[i]->stick_counter;
+        logger << left << setw(7) << AllSquads[i]->besiege;
+        logger << left << setw(7) << AllSquads[i]->hot_id;
+        logger << left << setw(7) << AllSquads[i]->target_id << endl;
+        printHeroList(AllSquads[i]->members);
+        logger << "-----------" << endl;
+    }
 }
 
 #endif
@@ -659,10 +692,6 @@ Pos verticalChangePos(
     far_p.x = (int) (len * vx + origin.x);
     far_p.y = (int) (len * vy + origin.y);
 
-#ifdef LOG
-    logger << "#verticalChangePos() : " << endl;
-    logger << origin << reference << len << far_p << endl;
-#endif
     return far_p;
 }
 
@@ -677,15 +706,15 @@ void initilize() {
     // 初始化AllSquads
     if (AllSquads.empty()) {
         for (int i = 0; i <= 1; ++i) {
-            MainCarrier temp(i);
+            MainCarrier *temp = new MainCarrier(i);
             AllSquads.push_back(temp);
         }
         for (int j = 2; j <= 5; ++j) {
-            MineDigger temp(j);
+            MineDigger *temp = new MineDigger(j);
             AllSquads.push_back(temp);
         }
         for (int k = 6; k <= 7; ++k) {
-            BattleScouter temp(k);
+            BattleScouter *temp = new BattleScouter(k);
             AllSquads.push_back(temp);
         }
     }
@@ -735,23 +764,6 @@ string int2str(int n) {
     int2str << n;
     int2str >> str;
     return str;
-}
-
-
-// handling stored data
-template<typename T>
-void clearOldInfo(vector<T> &vct) {
-    if (vct.size() > CLEAN_LIMIT) {
-#ifdef LOG
-        logger << "(... Clearing excess data)" << endl;
-#endif
-        int check = 0;
-        for (auto i = vct.begin(); i != vct.end(); i++) {
-            check++;
-            vct.erase(i);
-            if (check == CLEAN_NUMS) return;
-        }
-    }
 }
 
 
@@ -926,8 +938,6 @@ void Commander::getUnits() {
     logger << "@Visible monsters" << endl;
     printUnit(vi_monsters);
     logger << endl;
-    logger << "@Sector enemies" << endl;
-    printUnit(sector_en);
 #endif
 }
 
@@ -936,7 +946,7 @@ void Commander::getUnits() {
 
 void Commander::updateSquad() {
     for (int i = 0; i < SQUAD_N; ++i) {
-        AllSquads[i].roundUpdate();
+        AllSquads[i]->roundUpdate();
     }
 }
 
@@ -953,9 +963,10 @@ void Commander::squadSet() {
     for (int j = 0; j < cur_friends.size(); ++j) {
         all.push_back(cur_friends[j]->id);
     }
+
     // 释放失守小队的id
     for (int i = 3; i < SQUAD_N; ++i) {             // 从i = 3开始扫描
-        if (AllSquads[i].situation < BAK_LIMIT) {   // 劣势了
+        if (AllSquads[i]->situation < BAK_LIMIT) {   // 劣势了
             SquadMembers[i] = empty;
         }
     }
@@ -988,16 +999,17 @@ void Commander::squadSet() {
 
     // toedit 扫描MC小队,视情况变更目标
     for (int t = 0; t <= 1; ++t) {                      // t-index of MC
-        if (AllSquads[t].situation < BAK_LIMIT) {       // if lost
+        if (AllSquads[t]->situation < BAK_LIMIT) {       // if lost
             // change to backup target
             int _sz = (int) BackupTactics.size();
             srand((unsigned int) Round);
             int new_t = BackupTactics[rand() % _sz];
             if (new_t == SquadTargets[t]) {
-                new_t = (new_t + Round) % _sz;
+                new_t = ++new_t % _sz;
             }
             SquadTargets[t] = new_t;
-        } else if (AllSquads[t].situation > SUP_LIMIT) {// if occupied
+            AllSquads[t]->resetTacMonitor(StickRounds);
+        } else if (AllSquads[t]->situation > SUP_LIMIT) {// if occupied
             // left a MD squad
             for (int i = 2; i <= 5; ++i) {              // 扫描所有MD
                 if (!SquadMembers[i].empty()) {         // 发现空MD
@@ -1019,9 +1031,10 @@ void Commander::squadSet() {
             srand((unsigned int) Round);
             int new_t = SuperiorTactics[rand() % _sz];
             if (new_t == SquadTargets[t]) {
-                new_t = (new_t + Round) % _sz;
+                new_t = ++new_t % _sz;
             }
             SquadTargets[t] = new_t;
+            AllSquads[t]->resetTacMonitor(StickRounds);
         }
     }
 
@@ -1138,7 +1151,7 @@ void Commander::TeamAct() {
     spendMoney();
     // squads
     for (int i = 0; i < SQUAD_N; ++i) {
-        AllSquads[i].SquadCommand();
+        AllSquads[i]->SquadCommand();
     }
 }
 
@@ -1295,7 +1308,7 @@ void AssaultSquad::makeHeroes() {
                 break;
             default:
 #ifdef LOG
-                logger << "[ERRO] Friend enemy's type not found" << endl;
+                logger << "[ERRO] Friend hero's type not found" << endl;
 #endif
                 break;
         }
@@ -1340,6 +1353,10 @@ void AssaultSquad::slipAttack() {
 /*************************Cmd load****************************/
 
 void AssaultSquad::setBesiege() {
+#ifdef TEMP
+    besiege = false;
+    return;
+#endif
     if (members.size() < 3) {
         besiege = false;
     } else {
@@ -1352,14 +1369,6 @@ void AssaultSquad::setBesiege() {
     }
 }
 
-void AssaultSquad::setOthers() {
-    return;
-}
-
-
-void AssaultSquad::evaluateSituation() {
-    situation = 0;
-}
 
 // public
 
@@ -1368,7 +1377,16 @@ AssaultSquad::AssaultSquad(int _id) {
     situation = 0;
     battle_range = BATTLE_RANGE;
     stick_counter = StickRounds;
-    roundUpdate();
+    clean();
+
+    getAllCmdInfo();        // target, mem_id
+
+    // setting
+    stick_counter--;
+    setBesiege();
+    getUnits();
+    lockHot();
+    makeHeroes();
 }
 
 
@@ -1410,6 +1428,8 @@ void AssaultSquad::SquadCommand() {
 
 MainCarrier::MainCarrier(int _id) : AssaultSquad(_id) {
     type = 0;
+    setOthers();
+    evaluateSituation();
 }
 
 
@@ -1419,8 +1439,10 @@ void MainCarrier::setOthers() {
 
 
 void MainCarrier::evaluateSituation() {
+    if (member_id.empty()) {
+        resetTacMonitor(StickRounds);
+    }
     if (stick_counter > 0) {
-        situation = 0;
         return;
     }   // assert: stick_counter <= 0
 
@@ -1452,6 +1474,8 @@ void MainCarrier::evaluateSituation() {
 
 MineDigger::MineDigger(int _id) : AssaultSquad(_id) {
     type = 1;
+    setOthers();
+    evaluateSituation();
 }
 
 
@@ -1464,16 +1488,15 @@ void MineDigger::setOthers() {
         mine_energy = BIG_INT;
     } else {
         mine_energy = console->unitArg("energy", "c", mine);
-#ifdef LOG
-        logger << ">> Target mine energy: " << mine_energy << endl;
-#endif
     }
 }
 
 
 void MineDigger::evaluateSituation() {
+    if (member_id.empty()) {
+        resetTacMonitor(StickRounds);
+    }
     if (stick_counter > 0) {
-        situation = 0;
         return;
     }   // assert: stick_counter <= 0
 
@@ -1511,6 +1534,8 @@ void BattleScouter::lockHot() {
 
 BattleScouter::BattleScouter(int _id) : AssaultSquad(_id) {
     type = 2;
+    setOthers();
+    evaluateSituation();
 }
 
 
@@ -1520,8 +1545,10 @@ void BattleScouter::setOthers() {
 
 
 void BattleScouter::evaluateSituation() {
+    if (member_id.empty()) {
+        resetTacMonitor(StickRounds);
+    }
     if (stick_counter > 0) {
-        situation = 0;
         return;
     }   // assert: stick_counter <= 0
 
@@ -1651,6 +1678,7 @@ Hero::Hero(int _id, int _hot, int _tactic) :
     can_skill = punit->canUseSkill(SKILL_NAME[punit->typeId + 5]);
     can_attack = punit->canUseSkill("Attack");
     besiege = true;
+    emergency = false;
 }
 
 
@@ -1674,6 +1702,7 @@ Hero::Hero(PUnit *me, PUnit *hot, int t_id) :
 
     can_skill = punit->canUseSkill(SKILL_NAME[punit->typeId + 5]);
     can_attack = punit->canUseSkill("Attack");
+    emergency = false;
 }
 
 
@@ -1687,17 +1716,20 @@ Hero::~Hero() {
 
 void Hero::Emergency() {
     if (timeToFlee()) {
+        emergency = true;
         fastFlee();
         return;
     }
 
     if (outOfField() || hot == nullptr) {
+        emergency = true;
         justMove();
         return;
     }
 
     if (!besiege) {
         if (!can_skill && !can_attack) {
+            emergency = true;
             cdWalk();
             return;
         }
@@ -1715,7 +1747,9 @@ void Hero::Attack() {
 
 void Hero::HeroAct() {
     Emergency();
-    Attack();
+    if (!emergency) {
+        Attack();
+    }
 }
 
 
@@ -1893,6 +1927,9 @@ void Master::fastFlee() {
 
 Pos Master::blinkTarget(bool chase) {
     // 进攻型
+    if (hot == nullptr)
+        return Pos(-1, -1);
+
     int dist2 = dis2(hot->pos, pos);
     if (chase) {
         Pos chase_p = parallelChangePos(pos, hot->pos, dist2 - range / 2, false);
@@ -1917,17 +1954,20 @@ Master::Master(PUnit *me, PUnit *hot, int t_id) :
 
 void Master::Emergency() {
     if (Hero::timeToFlee()) {
+        emergency = true;
         fastFlee();
         return;
     }
 
     if (outOfField() || hot == nullptr) {
+        emergency = true;
         Hero::justMove();
         return;
     }
 
     if (!besiege) {
         if (!can_skill && !can_attack) {
+            emergency = true;
             cdWalk();
             return;
         }
@@ -1964,7 +2004,13 @@ Pos Scouter::observeTarget() {
     for (int i = 0; i < OBSERVE_POS_N; ++i) {
         int dist2 = dis2(pos, OBSERVE_POS[i]);
         if (dist2 < SET_OBSERVER_RANGE) {
-            return OBSERVE_POS[i];
+            UnitFilter filter;
+            filter.setAreaFilter(new Circle(OBSERVE_POS[i], OBSERVER_VIEW), "a");
+            filter.setTypeFilter("Observer", "a");
+            vector<PUnit *> observers = console->friendlyUnits(filter);
+            if (!observers.empty()) {
+                return OBSERVE_POS[i];
+            }
         }
     }
     return Pos(-1, -1);
@@ -1982,17 +2028,20 @@ Scouter::Scouter(PUnit *me, PUnit *hot, int t_id) :
 
 void Scouter::Emergency() {
     if (Hero::timeToFlee()) {
+        emergency = true;
         Hero::fastFlee();
         return;
     }
 
     if (outOfField() || hot == nullptr) {
+        emergency = true;
         justMove();
         return;
     }
 
     if (!besiege) {
         if (!can_skill && !can_attack) {
+            emergency = true;
             cdWalk();
             return;
         }
