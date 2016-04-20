@@ -128,16 +128,7 @@ static ID_LIST SquadMembers[SQUAD_N] = {};      // 各小队成员安排
 // Squad list
 static const int SINGLE_MC_LIMIT = 4;           // MC人数限制
 static const int SINGLE_MD_LIMIT = 2;           // MD人数限制
-static AssaultSquad AllSquads[SQUAD_N] = {
-        MainCarrier(0),             // type0 任务:主力攻击
-        MainCarrier(1),             // type0
-        MineDigger(2),              // type1 任务:挖矿
-        MineDigger(3),              // type1
-        MineDigger(4),              // type1
-        MineDigger(5),              // type1
-        BattleScouter(6),           // type2 任务:巡查
-        BattleScouter(7)            // type2
-};                                      // 所有小队,默认初始化后需要调整参数
+static vector<AssaultSquad> AllSquads;          // 所有小队,默认初始化后需要调整参数
 
 
 
@@ -183,6 +174,7 @@ void clearOldInfo(vector<T> &vct);                  // 及时清理陈旧储存�
 // ============== Game and Units ===================
 // Global
 int enemyCamp();                                    // 敌人的camp
+void initilize();                                   // 初始化
 
 // Unit
 int buyNewCost(int cost_indx);                      // 当前购买新英雄成本,参数为HERO_NAME的索引
@@ -238,7 +230,6 @@ public:
     /**********************************************************/
     // LOADER
     void TeamAct();                                 // 基地和英雄动作
-    void StoreAndClean();                           // 储存
 
 };
 
@@ -273,13 +264,13 @@ public:
     virtual void clean();               // 静态对象,每回合开始需要重置一些东西
     virtual void resetTacMonitor(int _n = StickRounds);   // 重设计数器/判断器
     // construct
-    virtual void setOthers() = 0;       // 用来给子类设置自身独有的成员变量
+    virtual void setOthers();           // 用来给子类设置自身独有的成员变量
     virtual void setBesiege();          // 设置小队/成员的besiege标志
     virtual void getUnits();            // get sector_en sector_f
     virtual void getAllCmdInfo();       // 从全局变量获得信息
     virtual void lockHot();             // get hot
     virtual void makeHeroes();          // make heroes
-    virtual void evaluateSituation() = 0;   // 评估situation,+ postive, - negative
+    virtual void evaluateSituation();   // 评估situation,+ postive, - negative
 
     /*************************Actions****************************/
     virtual void crossBesiege();        // 十字卡位包围准备
@@ -359,13 +350,11 @@ public:
 
     /*********************************************************/
     virtual PUnit *nearestEnemy() const;
-    virtual Hero *getStoredHero(int prev_n);            // 获得之前prev_n局的储存对象
 
     /*************************Helpers***************************/
     virtual bool outOfField();                          // 离开战场了
     virtual bool timeToSkill() = 0;                     // 技能释放环境判断
     virtual bool timeToFlee();                          // 是否应该逃窜
-    virtual bool stuck();                               // 由于未知原因卡住了
     virtual void checkHot();                            // 检查一下热点目标是否有问题
 
     /**************************Actions**************************/
@@ -389,9 +378,6 @@ public:
 
     // 统一调用接口
     virtual void HeroAct();
-
-    // fixme 以下几段代码需要重构并放弃
-    void StoreMe();     // 储存该英雄信息
 
 #ifdef LOG
     void printAtkInfo() const;
@@ -469,6 +455,9 @@ public:
 
 /*#################### MAIN FUNCTION #######################*/
 void player_ai(const PMap &map, const PPlayerInfo &info, PCommand &cmd) {
+    if (Round < 1) {
+        initilize();
+    }
 #ifdef LOG
     logger << "====ROUND " << Round << " STARTS====" << endl;
     logger << "@Economy: " << Economy << endl;
@@ -481,9 +470,6 @@ void player_ai(const PMap &map, const PPlayerInfo &info, PCommand &cmd) {
 
     // Hero do actions // todo 时间消耗大户
     commander->TeamAct();
-
-    // Store all
-    commander->StoreAndClean();
 
     delete commander;
     delete console;
@@ -687,6 +673,23 @@ int enemyCamp() {
     else return 0;
 }
 
+void initilize() {
+    // 初始化AllSquads
+    if (AllSquads.empty()) {
+        for (int i = 0; i <= 1; ++i) {
+            MainCarrier temp(i);
+            AllSquads.push_back(temp);
+        }
+        for (int j = 2; j <= 5; ++j) {
+            MineDigger temp(j);
+            AllSquads.push_back(temp);
+        }
+        for (int k = 6; k <= 7; ++k) {
+            BattleScouter temp(k);
+            AllSquads.push_back(temp);
+        }
+    }
+}
 
 // data structure related
 bool compareLevel(PUnit *a, PUnit *b) {
@@ -853,9 +856,8 @@ Commander::Commander() {
     // cur_friends  vi_enemies
     getUnits();
     // arrange squads 顺序不能错
-    lockSquadTarget();
-    updateSquad();
     squadSet();
+    updateSquad();
 }
 
 
@@ -998,7 +1000,7 @@ void Commander::squadSet() {
         } else if (AllSquads[t].situation > SUP_LIMIT) {// if occupied
             // left a MD squad
             for (int i = 2; i <= 5; ++i) {              // 扫描所有MD
-                if (!SquadMembers[i].size() == 0) {     // 发现空MD
+                if (!SquadMembers[i].empty()) {         // 发现空MD
                     if (SquadTargets[t] == 0) {         // 中间矿留一个
                         SquadMembers[i].push_back(SquadMembers[t].back());
                         SquadMembers[t].pop_back();
@@ -1022,6 +1024,8 @@ void Commander::squadSet() {
             SquadTargets[t] = new_t;
         }
     }
+
+    // todo 什么时候推基地
 
 }
 
@@ -1134,7 +1138,7 @@ void Commander::TeamAct() {
     spendMoney();
     // squads
     for (int i = 0; i < SQUAD_N; ++i) {
-        AllSquads->SquadCommand();
+        AllSquads[i].SquadCommand();
     }
 }
 
@@ -1348,6 +1352,14 @@ void AssaultSquad::setBesiege() {
     }
 }
 
+void AssaultSquad::setOthers() {
+    return;
+}
+
+
+void AssaultSquad::evaluateSituation() {
+    situation = 0;
+}
 
 // public
 
@@ -1493,7 +1505,7 @@ void MineDigger::evaluateSituation() {
  ************************************************************/
 
 void BattleScouter::lockHot() {
-    hot == nullptr;
+    hot = nullptr;
 }
 
 
@@ -1512,9 +1524,6 @@ void BattleScouter::evaluateSituation() {
         situation = 0;
         return;
     }   // assert: stick_counter <= 0
-
-    int _sz_f = (int) sector_f.size();
-    int _sz_e = (int) sector_en.size();
 
     // 一旦对改点观测完成即撤出 fixme 存在问题,不能把situation设负,会被回收
     for (int i = 0; i < members.size(); ++i) {
@@ -1563,10 +1572,6 @@ bool Hero::timeToFlee() {
     // 防止berserker误判
     if (hasBuff(punit, "WinOrDie"))
         return false;
-
-    // 被卡住
-    if (stuck())
-        return true;
 
     // 血量过低
     if (hp < HP_ALERT * punit->max_hp) {
@@ -1675,7 +1680,6 @@ Hero::Hero(PUnit *me, PUnit *hot, int t_id) :
 Hero::~Hero() {
     punit = nullptr;
     hot = nullptr;
-    Hero(-1, -1, 0);
 }
 
 
@@ -1785,7 +1789,7 @@ void HammerGuard::Attack() {
 
 bool Berserker::timeToSkill() {
     // hot必须在攻击范围内
-    if (!dis2(hot->pos, pos) > range)
+    if (!(dis2(hot->pos, pos) > range))
         return false;
 
     // this必须能sacrifice,且至少下一回合能攻击
