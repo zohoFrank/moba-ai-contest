@@ -103,7 +103,7 @@ vector<PUnit *> vi_monsters;                    // 可见野怪
 // 7个矿顺序依次是 0-中矿,1-8点,2-10点,3-4点,4-2点,5-西北,6-东南
 static const int SUP_LIMIT = 10;                // 优势判分标准
 static vector<int> SuperiorTactics = {0, 1, 2, 3, 4}; // 优势战术
-static const int BAK_LIMIT = -10;               // 劣势判分标准
+static const int BAK_LIMIT = -50;               // 劣势判分标准
 static vector<int> BackupTactics = {5, 6};            // 备选战术 player1
 
 // 战术延时
@@ -126,8 +126,8 @@ static int SquadTargets[SQUAD_N] = {};          // 小队战术id
 static ID_LIST SquadMembers[SQUAD_N] = {};      // 各小队成员安排
 
 // Squad list
-static const int SINGLE_MC_LIMIT = 4;           // MC人数限制
-static const int SINGLE_MD_LIMIT = 2;           // MD人数限制
+static const int SINGLE_MC_LIMIT = 8;           // MC人数max限制
+static const int SINGLE_MD_LIMIT = 3;           // MD人数min限制
 static vector<AssaultSquad *> AllSquads;          // 所有小队,默认初始化后需要调整参数
 
 
@@ -867,7 +867,7 @@ Commander::Commander() {
 
     // cur_friends  vi_enemies
     getUnits();
-    // arrange squads 顺序不能错
+    // 顺序不能错
     squadSet();
     updateSquad();
 }
@@ -957,7 +957,6 @@ void Commander::squadSet() {
      * 2.type>0的队伍劣势时,将单位交换给MC队伍,从前往后填充
      * 3.检查MC队伍情况,有占领的分部分人数到MD留守,MC分配新的目标;失守的换个目标
      */
-    vector<int> empty; empty.clear();
     // 所有英雄id
     vector<int> all;
     for (int j = 0; j < cur_friends.size(); ++j) {
@@ -965,9 +964,9 @@ void Commander::squadSet() {
     }
 
     // 释放失守小队的id
-    for (int i = 3; i < SQUAD_N; ++i) {             // 从i = 3开始扫描
-        if (AllSquads[i]->situation < BAK_LIMIT) {   // 劣势了
-            SquadMembers[i] = empty;
+    for (int i = 2; i < SQUAD_N; ++i) {                 // 从i = 2开始扫描
+        if (AllSquads[i]->situation < BAK_LIMIT) {      // 劣势了
+            SquadMembers[i].clear();
         }
     }
     // 所有已指派的英雄id
@@ -1009,20 +1008,26 @@ void Commander::squadSet() {
             }
             SquadTargets[t] = new_t;
             AllSquads[t]->resetTacMonitor(StickRounds);
+#ifdef TEMP
+            logger << ">> ## [cmd] change to BACKUP plan" << endl;
+#endif
         } else if (AllSquads[t]->situation > SUP_LIMIT) {// if occupied
             // left a MD squad
             for (int i = 2; i <= 5; ++i) {              // 扫描所有MD
-                if (!SquadMembers[i].empty()) {         // 发现空MD
+                if (SquadMembers[i].empty()) {         // 发现空MD
                     if (SquadTargets[t] == 0) {         // 中间矿留一个
                         SquadMembers[i].push_back(SquadMembers[t].back());
                         SquadMembers[t].pop_back();
                     } else {                            // 野矿留两个
-                        for (int j = 0; j < 2; ++j) {
+                        for (int j = 0; j < SINGLE_MD_LIMIT; ++j) {
                             SquadMembers[i].push_back(SquadMembers[t].back());
                             SquadMembers[t].pop_back();
                         }
                     }
                     SquadTargets[i] = SquadTargets[t];  // 设target
+#ifdef TEMP
+                    logger << "## [cmd] spare a MD" << endl;
+#endif
                     break;                              // 一个MD就够了!
                 }
             }
@@ -1035,6 +1040,9 @@ void Commander::squadSet() {
             }
             SquadTargets[t] = new_t;
             AllSquads[t]->resetTacMonitor(StickRounds);
+#ifdef TEMP
+            logger << ">> ## [cmd] change to SUPERIOR plan" << endl;
+#endif
         }
     }
 
@@ -1488,13 +1496,16 @@ void MineDigger::setOthers() {
         mine_energy = BIG_INT;
     } else {
         mine_energy = console->unitArg("energy", "c", mine);
+#ifdef TEMP
+        logger << ">> mine energy near MD id=" << id << ": " << mine_energy << endl;
+#endif
     }
 }
 
 
 void MineDigger::evaluateSituation() {
     if (member_id.empty()) {
-        resetTacMonitor(StickRounds);
+        resetTacMonitor(10 * StickRounds);
     }
     if (stick_counter > 0) {
         return;
