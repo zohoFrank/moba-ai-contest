@@ -10,6 +10,7 @@
 #endif
 
 #include "console.h"
+#include <random>
 #include <sstream>
 #include <map>
 #include <set>
@@ -100,25 +101,21 @@ vector<PUnit *> vi_monsters;                    // 可见野怪
  ************************************************************/
 /* 战术核心 */
 // 7个矿顺序依次是 0-中矿,1-8点,2-10点,3-4点,4-2点,5-西北,6-东南
-static int SuperiorTactics[] = {0, 1, 2, 3, 4}; // 优势战术
-static int SupTN = 5;
-static int BackupTactics[] = {5, 6};            // 备选战术 player1
-static int BakTN = 2;
+static const int SUP_LIMIT = 10;                // 优势判分标准
+static vector<int> SuperiorTactics = {0, 1, 2, 3, 4}; // 优势战术
+static const int BAK_LIMIT = -10;               // 劣势判分标准
+static vector<int> BackupTactics = {5, 6};            // 备选战术 player1
 
 // 战术延时
 static int StickRounds = 40;                    // 初始保留战术的时间
-static int HoldTill = 50;                       // 连续守住回合数,才采取动作
 static int TCounter = StickRounds;              // 设置战术倒计时
 
 // 战局判断
-static int Situation = 0;                       // 0-HOLD_TILL是僵持,负数是失守,>HOLD_TILL是占据
-static const int SCOUT_OK = 9;                  // 侦查完成的最大距离
+static int TargetState[TAC_TARGETS_N] = {};     // 0-未占据,1-占据
 
-// 继承上一轮
-static int HotId = -1;                          // 储存的hot id
-static Tactic Target = MINE_POS[0];             // 储存的targets
-
-// Scouting info
+// todo Scouting info
+static const int SCOUT_OK = 9;                  // 侦查完成认定:距离目标的距离
+static vector<int> ScouterList;                 // 侦查目标列表
 int LastSeenRound[TAC_TARGETS_N] = {};          // 记录上次观测到的回合数
 int EnemiesN[TAC_TARGETS_N] = {};               // 记录上次观测时各矿区人数
 
@@ -128,19 +125,19 @@ static const int SQUAD_N = 8;                   // 小队数量
 static int SquadTargets[SQUAD_N] = {};          // 小队战术id
 static ID_LIST SquadMembers[SQUAD_N] = {};      // 各小队成员安排
 
-static vector<int> ScouterList;                 // 侦查目标列表
-
 // Squad list
+static const int SINGLE_MC_LIMIT = 4;           // MC人数限制
+static const int SINGLE_MD_LIMIT = 2;           // MD人数限制
 static AssaultSquad AllSquads[SQUAD_N] = {
-        MainCarrier(0),            // type0 任务:主力攻击
-        MainCarrier(1),            // type0
-        MainCarrier(2),            // type0
-        MineDigger(3),             // type1 任务:挖矿
-        MineDigger(4),             // type1
-        MineDigger(5),             // type1
-        BattleScouter(6),          // type2 任务:巡查
-        BattleScouter(7)           // type2
-};                                // 所有小队,默认初始化后需要调整参数
+        MainCarrier(0),             // type0 任务:主力攻击
+        MainCarrier(1),             // type0
+        MineDigger(2),              // type1 任务:挖矿
+        MineDigger(3),              // type1
+        MineDigger(4),              // type1
+        MineDigger(5),              // type1
+        BattleScouter(6),           // type2 任务:巡查
+        BattleScouter(7)            // type2
+};                                      // 所有小队,默认初始化后需要调整参数
 
 
 
@@ -222,8 +219,7 @@ protected:
 
     // tactics 顺序不能错!
     void updateSquad();                             // 更新小队信息
-    void lockSquadTarget();                         // 指定小队目标
-    void distributeHeroes();                        // todo 更新小队后,视情况调整英雄分配
+    void squadSet();                                // 小队成员和目标分配
 
     // base actions
     void baseAttack();                              // 基地攻击
@@ -859,7 +855,7 @@ Commander::Commander() {
     // arrange squads 顺序不能错
     lockSquadTarget();
     updateSquad();
-    distributeHeroes();
+    squadSet();
 }
 
 
@@ -1028,6 +1024,93 @@ void Commander::updateSquad() {
 }
 
 
+void Commander::squadSet() {
+    /*
+     * 1.优先填充靠前的MC队伍
+     * 2.type>0的队伍劣势时,将单位交换给MC队伍,从前往后填充
+     * 3.检查MC队伍情况,有占领的分部分人数到MD留守,MC分配新的目标;失守的换个目标
+     */
+    vector<int> empty; empty.clear();
+    // 所有英雄id
+    vector<int> all;
+    for (int j = 0; j < cur_friends.size(); ++j) {
+        all.push_back(cur_friends[j]->id);
+    }
+    // 释放失守小队的id
+    for (int i = 3; i < SQUAD_N; ++i) {             // 从i = 3开始扫描
+        if (AllSquads[i].situation < BAK_LIMIT) {   // 劣势了
+            SquadMembers[i] = empty;
+        }
+    }
+    // 所有已指派的英雄id
+    vector<int> assigned;
+    for (int k = 0; k < SQUAD_N; ++k) {
+        vector<int> temp = SquadMembers[k];
+        for (int i = 0; i < temp.size(); ++i) {
+            assigned.push_back(temp[i]);
+        }
+    }
+
+    // 求差,得redundant
+    vector<int> redundant(10);
+    sort(all.begin(), all.end());
+    sort(assigned.begin(), assigned.end());
+    auto it = set_difference(all.begin(), all.end(), assigned.begin(), assigned.end(), redundant.begin());
+    redundant.resize((unsigned long) (it - redundant.begin()));
+
+    // 分配redundant到各mc
+    for (int s = 0; s < 2; ++s) {
+        int _space = (int) (SINGLE_MC_LIMIT - SquadMembers[s].size());
+        if (_space > 0) {
+            for (int i = 0; i < _space && !redundant.empty(); ++i) {
+                SquadMembers[s].push_back(redundant.back());
+                redundant.pop_back();
+            }
+        }
+    }
+
+    // toedit 扫描MC小队,视情况变更目标
+    for (int t = 0; t <= 1; ++t) {                      // t-index of MC
+        if (AllSquads[t].situation < BAK_LIMIT) {       // if lost
+            // change to backup target
+            int _sz = (int) BackupTactics.size();
+            srand((unsigned int) Round);
+            int new_t = BackupTactics[rand() % _sz];
+            if (new_t == SquadTargets[t]) {
+                new_t = (new_t + Round) % _sz;
+            }
+            SquadTargets[t] = new_t;
+        } else if (AllSquads[t].situation > SUP_LIMIT) {// if occupied
+            // left a MD squad
+            for (int i = 2; i <= 5; ++i) {              // 扫描所有MD
+                if (!SquadMembers[i].size() == 0) {     // 发现空MD
+                    if (SquadTargets[t] == 0) {         // 中间矿留一个
+                        SquadMembers[i].push_back(SquadMembers[t].back());
+                        SquadMembers[t].pop_back();
+                    } else {                            // 野矿留两个
+                        for (int j = 0; j < 2; ++j) {
+                            SquadMembers[i].push_back(SquadMembers[t].back());
+                            SquadMembers[t].pop_back();
+                        }
+                    }
+                    SquadTargets[i] = SquadTargets[t];  // 设target
+                    break;                              // 一个MD就够了!
+                }
+            }
+            // and change MC to another superior target
+            int _sz = (int) SuperiorTactics.size();
+            srand((unsigned int) Round);
+            int new_t = SuperiorTactics[rand() % _sz];
+            if (new_t == SquadTargets[t]) {
+                new_t = (new_t + Round) % _sz;
+            }
+            SquadTargets[t] = new_t;
+        }
+    }
+
+}
+
+
 /*************************Base actions**************************/
 
 void Commander::baseAttack() {
@@ -1122,16 +1205,8 @@ void Commander::callBack() {
     filter.setAvoidFilter("Observer", "a");
     filter.setCampFilter(enemyCamp());
     int base_en = (int) console->enemyUnits(filter).size();
-    if (base_en >= BACK_BASE) {
-//        // 进行结算,召回响应人数的己方英雄
-//        for (int i = 0; i < base_en; ++i) {
-//            srand((unsigned int) Round / 13);
-//            int index = (int) (rand() % heroes.size());
-//            heroes[index]->setTarget(MILITARY_BASE_POS[CAMP]);
-//        }
-        Target = MILITARY_BASE_POS[CAMP];
-        StickRounds = 50;
-    }
+
+    // todo 召回方案
 }
 
 
@@ -1145,14 +1220,6 @@ void Commander::TeamAct() {
     // squads
     for (int i = 0; i < SQUAD_N; ++i) {
         AllSquads->SquadCommand();
-    }
-}
-
-
-void Commander::StoreAndClean() {
-    int _sz = (int) heroes.size();
-    for (int i = 0; i < _sz; ++i) {
-        heroes[i]->StoreMe();
     }
 }
 
@@ -1185,14 +1252,15 @@ void AssaultSquad::getAllCmdInfo() {
 
 
 void AssaultSquad::getUnits() {
+    Pos tar = TACTICS[target_id];
     UnitFilter filter;
-    filter.setAreaFilter(new Circle(TACTICS[target_id], battle_range), "a");
+    filter.setAreaFilter(new Circle(tar, battle_range), "a");
     filter.setAvoidFilter("Observer", "a");
     filter.setAvoidFilter("Mine", "w");
     filter.setHpFilter(1, 100000);
 
     // 根据战术目标,设定打击单位范围
-    if (Target != MINE_POS[0]) {
+    if (tar != MINE_POS[0]) {
         // 攻击其他矿时还攻击野怪/军事基地
         sector_en = console->enemyUnits(filter);
     } else {
@@ -1370,6 +1438,7 @@ void AssaultSquad::setBesiege() {
 
 AssaultSquad::AssaultSquad(int _id) {
     id = _id;
+    situation = 0;
     battle_range = BATTLE_RANGE;
     stick_counter = StickRounds;
     roundUpdate();
@@ -1414,7 +1483,11 @@ void AssaultSquad::SquadCommand() {
 
 MainCarrier::MainCarrier(int _id) : AssaultSquad(_id) {
     type = 0;
-    situation = 0;
+}
+
+
+void MainCarrier::setOthers() {
+    return;
 }
 
 
@@ -1450,7 +1523,9 @@ void MainCarrier::evaluateSituation() {
  * Implementation: class MineDigger
  ************************************************************/
 
-MineDigger::MineDigger(int _id) : AssaultSquad(_id) { }
+MineDigger::MineDigger(int _id) : AssaultSquad(_id) {
+    type = 1;
+}
 
 
 void MineDigger::setOthers() {
@@ -1466,11 +1541,6 @@ void MineDigger::setOthers() {
         logger << ">> Target mine energy: " << mine_energy << endl;
 #endif
     }
-}
-
-
-void MainCarrier::setOthers() {
-    return;
 }
 
 
@@ -1512,7 +1582,9 @@ void BattleScouter::lockHot() {
 }
 
 
-BattleScouter::BattleScouter(int _id) : AssaultSquad(_id) { }
+BattleScouter::BattleScouter(int _id) : AssaultSquad(_id) {
+    type = 2;
+}
 
 
 void BattleScouter::setOthers() {
@@ -1529,7 +1601,7 @@ void BattleScouter::evaluateSituation() {
     int _sz_f = (int) sector_f.size();
     int _sz_e = (int) sector_en.size();
 
-    // 一旦对改点观测完成即撤出
+    // 一旦对改点观测完成即撤出 fixme 存在问题,不能把situation设负,会被回收
     for (int i = 0; i < members.size(); ++i) {
         Pos p = members[i]->pos;
         if (dis2(p, TACTICS[target_id]) < SCOUT_OK) {
@@ -1570,24 +1642,6 @@ PUnit *Hero::nearestEnemy() const {
     return selected;
 }
 
-
-Hero *Hero::getStoredHero(int prev_n) {
-    if (prev_n >= StrHeroes.size())
-        return nullptr;
-
-    vector<Hero> round = StrHeroes[StrHeroes.size() - 1 - prev_n];
-    Hero *same = nullptr;
-    int _sz = (int) round.size();
-    for (int i = 0; i < _sz; ++i) {
-        Hero *temp = &round[i];
-        if (temp->type == type && temp->id == id) {
-            same = temp;
-        }
-    }
-    return same;
-}
-
-
 /**************************Helpers**************************/
 
 bool Hero::timeToFlee() {
@@ -1611,17 +1665,6 @@ bool Hero::timeToFlee() {
 bool Hero::outOfField() {
     int dist2 = dis2(pos, target);
     return dist2 > BATTLE_RANGE;
-}
-
-
-bool Hero::stuck() {
-    Hero *last = getStoredHero(1);
-    Hero *last2 = getStoredHero(2);
-    if (last == nullptr || last2 == nullptr)
-        return false;
-    else
-        return (last->pos.x == pos.x && last->pos.y == pos.y
-                && last2->pos.x == pos.x && last2->pos.y == pos.y);      // 无法重载
 }
 
 
@@ -1765,29 +1808,6 @@ void Hero::justMove() {
 #endif
 }
 
-
-void Hero::StoreMe() {
-    Hero temp(*this);
-    if (StrHeroes.empty()) {
-        vector<Hero> vct;
-        vct.clear();
-        vct.push_back(temp);
-        StrHeroes.push_back(vct);
-        return;
-    }
-
-    // 检查最后一个向量的round
-    int last_r = StrHeroes.back().back().round;
-    // 分情况处理储存
-    if (last_r == Round) {
-        StrHeroes.back().push_back(temp);
-    } else {
-        vector<Hero> vct;
-        vct.clear();
-        vct.push_back(temp);
-        StrHeroes.push_back(vct);
-    }
-}
 
 #ifdef LOG
 
