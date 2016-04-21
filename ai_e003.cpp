@@ -31,7 +31,7 @@ class MainCarrier; class MineDigger; class BattleScouter;
 /************************************************************
  * Const values
  ************************************************************/
-static const int BIG_INT = 1 << 29;
+static const int BIG_INT = 1 << 12;
 
 static const int TAC_TARGETS_N = 9;         // 7个矿+2个基地
 static const int MINE_NUM_SHIFT = 5;        // 编号偏移
@@ -123,12 +123,12 @@ typedef vector<int> ID_LIST;
 // Squad settings
 static const int SQUAD_N = 8;                   // 小队数量
 static int SquadTargets[SQUAD_N] = {};          // 小队战术id
-static ID_LIST SquadMembers[SQUAD_N] = {};      // 各小队成员安排
+static vector<ID_LIST> SquadMembers(8, vector<int>(0));            // 各小队成员安排
 
 // Squad list
-static const int SINGLE_MC_LIMIT = 8;           // MC人数max限制
-static const int SINGLE_MD_LIMIT = 3;           // MD人数min限制
-static vector<AssaultSquad *> AllSquads;          // 所有小队,默认初始化后需要调整参数
+static const int SINGLE_MC_LIMIT = 4;           // MC人数max限制
+static const int SINGLE_MD_LIMIT = 2;           // MD人数min限制
+static vector<AssaultSquad *> AllSquads;        // 所有小队,默认初始化后需要调整参数
 
 
 
@@ -1012,6 +1012,7 @@ void Commander::squadSet() {
             logger << ">> ## [cmd] change to BACKUP plan" << endl;
 #endif
         } else if (AllSquads[t]->situation > SUP_LIMIT) {// if occupied
+            if (SquadMembers[t].size() < 4) return;
             // left a MD squad
             for (int i = 2; i <= 5; ++i) {              // 扫描所有MD
                 if (SquadMembers[i].empty()) {         // 发现空MD
@@ -1335,7 +1336,7 @@ void AssaultSquad::crossBesiege() {
     Pos target = hot->pos;
 
     for (int i = 0; i < members.size(); ++i) {
-        Pos rightPos = target + onPosition[i];
+        Pos rightPos = target + onPosition[i % 4];
         PUnit *unit = members[i]->punit;
         members[i]->besiege = true;                 // 先设定besiege标志
 
@@ -1361,10 +1362,6 @@ void AssaultSquad::slipAttack() {
 /*************************Cmd load****************************/
 
 void AssaultSquad::setBesiege() {
-#ifdef TEMP
-    besiege = false;
-    return;
-#endif
     if (members.size() < 3) {
         besiege = false;
     } else {
