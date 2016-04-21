@@ -72,7 +72,9 @@ static const int CLEAN_LIMIT = 6;           // 最多保留回合记录
 static const int CLEAN_NUMS = 2;            // 超过最多保留记录后,一次清理数据组数
 
 // Hero
-static const double HP_ALERT = 0.2;         // 血量预警百分比
+static const double HP_FLEE_ALERT = 0.2;         // 血量预警百分比
+static const double HP_BACK_ALERT = 0.5;         // 回基地补血百分比
+
 static const int BATTLE_RANGE = 625;        // 战区范围
 
 // Squad
@@ -1610,7 +1612,7 @@ bool Hero::timeToFlee() {
         return false;
 
     // 血量过低
-    if (hp < HP_ALERT * punit->max_hp) {
+    if (hp < HP_FLEE_ALERT * punit->max_hp) {
         return true;
     }
 
@@ -1762,12 +1764,16 @@ void Hero::HeroAct() {
 }
 
 
-void Hero::justMove() {
-    console->move(target, punit);
+void Hero::justMove() { // assert: out of field or hot = nullptr
+    if (hp < HP_BACK_ALERT * punit->max_hp) {
+        console->move(MILITARY_BASE_POS[CAMP], punit);
+    } else {
+        console->move(target, punit);
 #ifdef LOG
-    logger << "[mov] move to ";
-    logger << target << endl;
+        logger << "[mov] move to ";
+        logger << target << endl;
 #endif
+    }
 }
 
 
