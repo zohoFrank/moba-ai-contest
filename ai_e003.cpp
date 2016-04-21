@@ -63,7 +63,7 @@ static int CAMP = -1;                       // which camp
 // Commander::levelUp
 static const double LEVEL_UP_COST = 0.5;    // 升级金钱比例
 // Commander::buyNewHero
-static int BUY_RANK = 42314132;             // 请参考hero_name
+static int BUY_RANK = 42134132;             // 请参考hero_name
 // Commander::callBack()
 static const int BACK_BASE = 2;             // 面对多少敌人,基地召回我方英雄
 
@@ -103,7 +103,7 @@ vector<PUnit *> vi_monsters;                    // 可见野怪
  ************************************************************/
 /* 战术核心 */
 // 7个矿顺序依次是 0-中矿,1-8点,2-10点,3-4点,4-2点,5-西北,6-东南
-static const int SUP_LIMIT = 10;                // 优势判分标准
+static const int SUP_LIMIT = 50;                // 优势判分标准
 static vector<int> SuperiorTactics = {0, 1, 2, 3, 4}; // 优势战术
 static const int BAK_LIMIT = -50;               // 劣势判分标准
 static vector<int> BackupTactics = {5, 6};            // 备选战术 player1
@@ -128,7 +128,7 @@ static int SquadTargets[SQUAD_N] = {};          // 小队战术id
 static vector<ID_LIST> SquadMembers(8, vector<int>(0));            // 各小队成员安排
 
 // Squad list
-static const int SINGLE_MC_LIMIT = 4;           // MC人数max限制
+static const int SINGLE_MC_LIMIT = 8;           // MC人数max限制
 static const int SINGLE_MD_LIMIT = 2;           // MD人数min限制
 static vector<AssaultSquad *> AllSquads;        // 所有小队,默认初始化后需要调整参数
 
@@ -178,7 +178,7 @@ void initilize();                                   // 初始化
 
 // Unit
 int buyNewCost(int cost_indx);                      // 当前购买新英雄成本,参数为HERO_NAME的索引
-bool hasBuff(PUnit *unit, const char *buff);        // 是否有某buff
+bool canDamage(PUnit *unit, int round=0);           // 单位当前是否可以输出伤害
 bool justBeAttacked(PUnit *test);
 
 double surviveRounds(PUnit *host, PUnit *guest);    // 计算存活轮数差:host - guest
@@ -268,7 +268,7 @@ public:
     virtual void getUnits();            // get sector_en sector_f
     virtual void getAllCmdInfo();       // 从全局变量获得信息
     virtual void lockHot();             // get hot
-    virtual void makeHeroes();          // make heroes
+    virtual void setHeroes();           // set heroes' targets and hots
     virtual void evaluateSituation() = 0;   // 评估situation,+ postive, - negative
 
     /*************************Actions****************************/
@@ -782,17 +782,6 @@ int buyNewCost(int cost_idx) {
 }
 
 
-bool hasBuff(PUnit *unit, const char *buff) {
-    vector<PBuff> buffs = unit->buffs;
-    int _sz = (int) buffs.size();
-    for (int i = 0; i < _sz; ++i) {
-        if (strcasecmp(buffs[i].name, buff) == 0)
-            return true;
-    }
-    return false;
-}
-
-
 double surviveRounds(PUnit *host, PUnit *guest) {
     /*
      * 计算公式:
@@ -821,9 +810,25 @@ PUnit *findID(vector<PUnit *> units, int _id) {
 }
 
 
+bool canDamage(PUnit *unit, int round) {
+    PBuff *dizzy = const_cast<PBuff *>(unit->findBuff("Dizzy"));
+    PSkill *attack = const_cast<PSkill *>(unit->findSkill("Attack"));
+    PSkill *ham_atk = const_cast<PSkill *>(unit->findSkill("HammerAttack"));
+
+    if ((dizzy && dizzy->timeLeft > round)) {
+        return false;
+    } else if (attack->cd <= round ||
+            (ham_atk && ham_atk->cd <= round)) {
+        return true;
+    } else {
+        return false;
+    }
+}
+
+
 bool justBeAttacked(PUnit *test) {
-    if (hasBuff(test, "BeAttacked") &&
-        test->findBuff("BeAttcked")->timeLeft == HURT_LAST_TIME)
+    if (test->findBuff("BeAttacked") &&
+        test->findBuff("BeAttacked")->timeLeft == HURT_LAST_TIME)
         return true;
     else
         return false;
@@ -966,7 +971,7 @@ void Commander::squadSet() {
     }
 
     // 释放失守小队的id
-    for (int i = 2; i < SQUAD_N; ++i) {                 // 从i = 2开始扫描
+    for (int i = 0; i < SQUAD_N; ++i) {                 // 从i = 2开始扫描
         if (AllSquads[i]->situation < BAK_LIMIT) {      // 劣势了
             SquadMembers[i].clear();
         }
@@ -1017,7 +1022,7 @@ void Commander::squadSet() {
             if (SquadMembers[t].size() < 4) return;
             // left a MD squad
             for (int i = 2; i <= 5; ++i) {              // 扫描所有MD
-                if (SquadMembers[i].empty()) {         // 发现空MD
+                if (SquadMembers[i].empty()) {          // 发现空MD
                     if (SquadTargets[t] == 0) {         // 中间矿留一个
                         SquadMembers[i].push_back(SquadMembers[t].back());
                         SquadMembers[t].pop_back();
@@ -1028,6 +1033,7 @@ void Commander::squadSet() {
                         }
                     }
                     SquadTargets[i] = SquadTargets[t];  // 设target
+                    AllSquads[i]->resetTacMonitor(0);   // reset
 #ifdef TEMP
                     logger << "## [cmd] spare a MD" << endl;
 #endif
@@ -1217,7 +1223,7 @@ void AssaultSquad::getUnits() {
 
     // 用迭代器遍历并删除指定元素 - 尸体
     for (auto i = sector_en.begin(); i != sector_en.end(); ) {
-        if (hasBuff(*i, "Reviving"))
+        if ((*i)->findBuff("Reviving"))
             i = sector_en.erase(i);
         else
             i++;
@@ -1252,11 +1258,11 @@ void AssaultSquad::lockHot() {
     for (int i = 0; i < _sz; ++i) {
         PUnit *en = sector_en[i];
         // WinOrDie
-        if (hasBuff(en, "WinOrDie")) {
+        if (en->findBuff("WinOrDie")) {
             win_or_die.push_back(en);
         }
         // WaitRevive
-        if (hasBuff(en, "WaitRevive")) {
+        if (en->findBuff("WinOrDie")) {
             wait_revive.push_back(en);
         }
 
@@ -1281,12 +1287,6 @@ void AssaultSquad::lockHot() {
         return;
     }
 
-    // 继承
-    PUnit *last_hot = findID(sector_en, hot_id);
-    if (last_hot != nullptr) {
-        hot = last_hot;
-        return;
-    }
 
     // 最弱
     if (index == -1) {
@@ -1299,7 +1299,7 @@ void AssaultSquad::lockHot() {
 }
 
 
-void AssaultSquad::makeHeroes() {
+void AssaultSquad::setHeroes() {
     int _sz = (int) member_id.size();
     for (int i = 0; i < _sz; ++i) {
         int hero_id = member_id[i];
@@ -1335,11 +1335,12 @@ void AssaultSquad::crossBesiege() {
     if (hot == nullptr || besiege == false)
         return;            // 没人就算了
 
-    const Pos onPosition[] = {Pos(1, 0), Pos(-1, 0), Pos(0, 1), Pos(0, -1)};
+    const Pos onPosition[] = {Pos(1, 0), Pos(-1, 0), Pos(0, 1), Pos(0, -1),
+                              Pos(1, 1), Pos(-1, -1), Pos(1, -1), Pos(-1, 1)};
     Pos target = hot->pos;
 
     for (int i = 0; i < members.size(); ++i) {
-        Pos rightPos = target + onPosition[i % 4];
+        Pos rightPos = target + onPosition[i];
         PUnit *unit = members[i]->punit;
         members[i]->besiege = true;                 // 先设定besiege标志
 
@@ -1394,7 +1395,7 @@ AssaultSquad::AssaultSquad(int _id) {
     setBesiege();
     getUnits();
     lockHot();
-    makeHeroes();
+    setHeroes();
 }
 
 
@@ -1416,7 +1417,7 @@ void AssaultSquad::roundUpdate() {
     setBesiege();
     getUnits();
     lockHot();
-    makeHeroes();
+    setHeroes();
     evaluateSituation();
 }
 
@@ -1447,12 +1448,12 @@ void MainCarrier::setOthers() {
 
 
 void MainCarrier::evaluateSituation() {
-    if (member_id.empty()) {
-        resetTacMonitor(StickRounds);
-    }
     if (stick_counter > 0) {
         return;
     }   // assert: stick_counter <= 0
+    if (member_id.empty()) {
+        resetTacMonitor(StickRounds);
+    }
 
     int _sz_f = (int) sector_f.size();
     int _sz_e = (int) sector_en.size();
@@ -1505,11 +1506,9 @@ void MineDigger::setOthers() {
 
 void MineDigger::evaluateSituation() {
     if (member_id.empty()) {
-        resetTacMonitor(10 * StickRounds);
-    }
-    if (stick_counter > 0) {
+        situation = 0;
         return;
-    }   // assert: stick_counter <= 0
+    }
 
     int _sz_f = (int) sector_f.size();
     int _sz_e = (int) sector_en.size();
@@ -1556,12 +1555,12 @@ void BattleScouter::setOthers() {
 
 
 void BattleScouter::evaluateSituation() {
-    if (member_id.empty()) {
-        resetTacMonitor(StickRounds);
-    }
     if (stick_counter > 0) {
         return;
     }   // assert: stick_counter <= 0
+    if (member_id.empty()) {
+        resetTacMonitor(StickRounds);
+    }
 
     // 一旦对改点观测完成即撤出 fixme 存在问题,不能把situation设负,会被回收
     for (int i = 0; i < members.size(); ++i) {
@@ -1608,7 +1607,7 @@ PUnit *Hero::nearestEnemy() const {
 
 bool Hero::timeToFlee() {
     // 防止berserker误判
-    if (hasBuff(punit, "WinOrDie"))
+    if (punit->findBuff("WinOrDie"))
         return false;
 
     // 血量过低
@@ -1837,55 +1836,47 @@ void HammerGuard::Attack() {
 // protected
 
 bool Berserker::timeToSkill() {
-    // hot必须在攻击范围内
-    if (!(dis2(hot->pos, pos) > range))
-        return false;
-
+    /*
+     * 不能SACRIFICE的条件:
+     * .技能冷却或
+     * .hot单位太远
+     * .在敌方可随时攻击的单位射程内
+     * .hot本身可以随时反击
+     */
     // this必须能sacrifice,且至少下一回合能攻击
     if (!can_skill || punit->findSkill("Attack")->cd > 1) {
         return false;
     }
 
+    // hot必须在攻击范围内
+    int dist2 = dis2(hot->pos, pos);
+    if (dist2 > range + speed * 5)
+        return false;
+
+
     // hot必须是落单对象
+    int rounds = max((dist2 - range), 0) / speed + 1;
     for (int i = 0; i < vi_enemies.size(); ++i) {
         PUnit *pu = vi_enemies[i];
-        int dist2 = dis2(hot->pos, pu->pos);
-        if (dist2 < pu->range + pu->speed) {        // 并不落单
+        if (hot->pos == pu->pos) continue;          // same unit
+        if (!canDamage(pu, rounds)) continue;       // no damage
+
+        if (dist2 < pu->range) {                    // 并不落单
             return false;
         }
     }
 
     // 且hot必须不能产生攻击
-    if (hot->findSkill("Attack")->cd <= 1 || hot->canUseSkill("HammerAttack")) {
+    if (canDamage(hot, rounds)) {
         return false;
     }
 
     // 以上都通过,则可以
+#ifdef TEMP
+    logger << ">> [BSK] use skill sacrifice. id=" << id << endl;
+#endif
     return true;
 }
-
-//void Berserker::prepareOrAttack() {
-//    // assert: not right time to sacrifice
-//    int atk_cd = punit->findSkill("Attack")->cd;
-//    int skill_cd = punit->findSkill("Sacrifice")->cd;
-//    int interval = atk_cd - skill_cd;
-//
-//    // 考虑:敌人位置圆心,this range半径的 安全+可达点 (可能需要三重循环,考虑精简算法)
-//    /*
-//     * 算法精简的考虑
-//     * 1.求可达:两圆是否相交--距离与半径和比较
-//     * 2.验证安全:求公共弦(垂直平分线段两点坐标),其垂线段,遍历验证
-//     * 3.遍历筛选:仅遍历与敌人圆 相交的其他敌人(两者距离 < range + enemy_speed)
-//     * 最不利:可能需要range * range * enemy_size 的次数,最大可达36 * 36 * 8 = 10368次
-//     */
-//    if (interval < 0 || besiege) {     // 下一次attack前不能sacrifice,或者围攻状态
-//        Hero::Attack();
-//        return;
-//    } else {
-//        UnitFilter
-//    }
-//
-//}
 
 
 // public
@@ -2084,24 +2075,25 @@ void Scouter::justMove() {
 
 
 
-
-
-
 /*
- * todo 要更改的内容
- * 1. 十字卡位
- * 2. 致命一击
- *
- * 1. 小队模式: 走位/队形...
- * 2. cdWalk
- * 3. Berserker的致命一击
-// * 5. buyLevel, buyNew, 对部分单位进行召回升级callBack, 钱过多时进行买活buyLife
- *
- * 战术:
- * 根据发展阶段定战术?
- * 根据相对实力定战术?
- *
- * temp:
- * 对抗偷基地流
- * 对抗中路优势+分矿流
+Update:
+1. sacrifice
+2. some tiny changes on tactics
+
+Fixed bugs:
+** Berserker can sacrifice fantasticly!!
+
+Non-fixed problems:
+. when changing tactics, two mc can't work together
+. if MD lost a mine, no one is going to get it back
+. when too few members, still split!
+
+. members are too separate
+. ?do not judge the state properly
+
+. hold camp / destroy camp
+. call back and levle up
+
+In 3 branches: HEAD, develop, origin/dev
  */
+
