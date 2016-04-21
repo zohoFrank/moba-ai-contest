@@ -1210,6 +1210,7 @@ void AssaultSquad::getUnits() {
         sector_en = console->enemyUnits(filter);
     }
 
+    filter.setCampFilter(CAMP);
     sector_f = console->friendlyUnits(filter);
 
     // 用迭代器遍历并删除指定元素 - 尸体
