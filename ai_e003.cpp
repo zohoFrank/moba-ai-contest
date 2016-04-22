@@ -61,10 +61,14 @@ static const Pos OBSERVE_POS[OBSERVE_POS_N] = {     // 带偏移量防止碰撞�
 static int CAMP = -1;                       // which camp
 
 // Commander
-// Commander::levelUp
+// levelUp
 static const double LEVEL_UP_COST = 0.5;    // 升级金钱比例
-// Commander::buyNewHero
-static const int BUY_RANK = 42134132;       // 请参考hero_name
+// buyNewHero
+static int BUY_RANK = 42314312;             // 请参考hero_name
+// callBack
+static const int CALLBACK_MIN_DIST2 = 600;  // 召回的必要最小距离
+static const int CALLBACK_LVLUP = 800;      // 召回升级的最小经济水平
+static const int CALLBACK_RECV_HP = 2000;   // 召回补血的最小经济水平
 
 // clearOldInfo()
 static const int CLEAN_LIMIT = 6;           // 最多保留回合记录
@@ -713,15 +717,15 @@ int enemyCamp() {
 void initilize() {
     // 初始化AllSquads
     if (AllSquads.empty()) {
-        for (int i = 0; i <= 1; ++i) {
+        for (int i = 0; i <= 1; ++i) {                  // [0,1]
             MainCarrier *temp = new MainCarrier(i);
             AllSquads.push_back(temp);
         }
-        for (int j = 2; j <= 5; ++j) {
+        for (int j = 2; j <= 5; ++j) {                  // [2,5]
             MineDigger *temp = new MineDigger(j);
             AllSquads.push_back(temp);
         }
-        for (int k = 6; k <= 7; ++k) {
+        for (int k = 6; k <= 7; ++k) {                  // [6,7]
             BattleScouter *temp = new BattleScouter(k);
             AllSquads.push_back(temp);
         }
@@ -732,6 +736,7 @@ void initilize() {
 bool compareLevel(PUnit *a, PUnit *b) {
     return (a->level < b->level);
 }
+
 
 bool operator<(const Pos &a, const Pos &b) {
     if (a.x != b.x) {
@@ -1017,6 +1022,8 @@ void Commander::squadSet() {
         }
     }
 
+
+    /*
     // toedit 扫描MC小队,视情况变更目标
     for (int t = 0; t <= 1; ++t) {                      // t-index of MC
         if (AllSquads[t]->situation < BAK_MAX) {       // if lost
@@ -1070,7 +1077,7 @@ void Commander::squadSet() {
     }
 
     // todo 什么时候推基地
-
+    */
 }
 
 
@@ -1178,20 +1185,32 @@ void Commander::callBack() {
     int _sz = (int) cur_friends.size();
 
     // 召回升级,每回合只召回一个
-    if (Economy > 1000) {
+    if (Economy > CALLBACK_LVLUP) {
         int min_level = BIG_INT;
         int min_i = -1;
         for (int i = 0; i < _sz; ++i) {
             PUnit *u = cur_friends[i];
-            if (u->level < min_level) {
+            if (u->level < min_level && dis2(u->pos, base) > CALLBACK_MIN_DIST2) {
                 min_level = u->level;
                 min_i = i;
             }
         }
-        console->callBackHero(cur_friends[min_i], base + Pos(3, 0));
+        if (min_i != -1) {
+            console->callBackHero(cur_friends[min_i], base + Pos(3, 0));
 #ifdef TEMP
-        logger << ">> [cmd] hero being called back to LEVEULUP. id=" << min_i << endl;
+            logger << ">> [cmd] hero being called back to LEVEULUP. id=" << min_i << endl;
 #endif
+        }
+    }
+
+    // 召回补血
+    if (Economy > CALLBACK_RECV_HP) {
+        for (auto i = cur_friends.begin(); i != cur_friends.end(); ++i) {
+            if (!(*i)->findBuff("WinOrDie")
+                && (*i)->hp < HP_FLEE_ALERT * (*i)->max_hp) {
+                console->callBackHero((*i), base + Pos(-3, 0));
+            }
+        }
     }
 
     // 召回防守
@@ -2126,11 +2145,12 @@ void Scouter::justMove() {
 
 /*
 Update:
-. some helping functions
-. finish the structure of CMD::callBack()
+. GetBack tactic vector
+. add callback to recover hp
 
 Fixed bugs:
-.
+. buy_rank should not be const
+. add callback least range
 
 Non-fixed problems:
 . when changing tactics, two mc can't work together
