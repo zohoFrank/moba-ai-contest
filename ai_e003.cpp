@@ -130,6 +130,10 @@ static vector<ID_LIST> SquadMembers(8, vector<int>(0));            // 各小队�
 // Squad list
 static const int SINGLE_MC_LIMIT = 8;           // MC人数max限制
 static vector<AssaultSquad *> AllSquads;        // 所有小队,默认初始化后需要调整参数
+static const int MC_I = 1;
+static const int MD_I = 5;
+static const int BS_I = 7;
+
 
 
 
@@ -213,12 +217,14 @@ protected:
     void squadSet();                                // 小队成员和目标分配
 
     // OTHER HELPERS
-    int judgeSituation(int squad);        // 封装接口,根据squad::situation返回
+    int judgeSituation(int squad);                  // 封装接口,根据squad::situation返回
     void markTarget(int target);                    // 封装接口,标记待(全体)夺取,放入GetBack
     void callBackupSquad(int needed_n);             // 组织一个小队,回防
     // squadSet helpers
     int getTotalLevels(int squad);                  // 获得小队总等级
     void moveMembers(int from, int to, int n);      // 在小队间移动成员
+    bool timeToPush();                              // 推基地时机判断
+    void pushEnemyCamp();                           // 推基地
     void handle(int squad, int levels, int situ);   // 处理动作
 
     // base actions
@@ -716,15 +722,15 @@ int enemyCamp() {
 void initilize() {
     // 初始化AllSquads
     if (AllSquads.empty()) {
-        for (int i = 0; i <= 1; ++i) {                  // [0,1]
+        for (int i = 0; i <= MC_I; ++i) {                  // [0,1]
             MainCarrier *temp = new MainCarrier(i);
             AllSquads.push_back(temp);
         }
-        for (int j = 2; j <= 5; ++j) {                  // [2,5]
+        for (int j = MC_I + 1; j <= MD_I; ++j) {                  // [2,5]
             MineDigger *temp = new MineDigger(j);
             AllSquads.push_back(temp);
         }
-        for (int k = 6; k <= 7; ++k) {                  // [6,7]
+        for (int k = MD_I + 1; k <= BS_I; ++k) {                  // [6,7]
             BattleScouter *temp = new BattleScouter(k);
             AllSquads.push_back(temp);
         }
@@ -1140,6 +1146,55 @@ void Commander::moveMembers(int from, int to, int n) {
         SquadMembers[from].pop_back();
     }
 
+}
+
+
+void Commander::handle(int squad, int levels, int situ) {
+    int phase;
+    if (levels < LEVEL1) {
+        phase = 0;
+    } else if (levels > LEVEL1 && levels < LEVEL2) {
+        phase = 1;
+    } else {
+        phase = 2;
+    }
+
+    /*
+     * timeToPush() -> push
+     * (^2, 0) -> nothing
+     * i = 0
+     * (0, ^0) -> change target but not members
+     * (>0, 1) -> left a MD, change target
+     * (>0, -1) -> change target but not members
+     * i > 1, phase == 0
+     * (0, ^-1) -> nothing
+     * (0, -1) -> dismiss and push getback
+     */
+
+    if (timeToPush()) {
+        pushEnemyCamp();
+        return;
+    }
+
+    if (situ == 0
+        || (squad > MC_I && situ < 1)) {
+        // do nothing
+        return;
+    }
+
+    if ((squad == 0 && phase == 0 && situ != 0)
+        || (squad > MC_I && phase > 0 && situ == -1)) {
+        // change target but not members
+
+    }
+
+    if (squad == 0 && phase > 0 && situ == 1) {
+        // left a MD and change target (SUP)
+    }
+
+    if (squad > MC_I && situ == -1) {
+        // dismiss, mark a getback
+    }
 }
 
 
@@ -2194,7 +2249,7 @@ void Scouter::justMove() {
 /*
 [NO TESTS]
 Update:
-. imple. specific details of squadSet()
+. build a framework of squadSet()
 
 Fixed bugs:
 
