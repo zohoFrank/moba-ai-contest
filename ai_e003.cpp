@@ -76,7 +76,7 @@ static const int CLEAN_NUMS = 2;            // 超过最多保留记录后,一�
 
 // Hero
 static const double HP_FLEE_ALERT = 0.2;         // 血量预警百分比
-static const double HP_BACK_ALERT = 0.5;         // 回基地补血百分比
+static const double HP_BACK_ALERT = 0.6;         // 回基地补血百分比
 
 static const int BATTLE_RANGE = 625;        // 战区范围
 
@@ -118,13 +118,8 @@ static int TCounter = StickRounds;              // 设置战术倒计时
 
 // 战局判断
 static int TargetState[TAC_TARGETS_N] = {};     // 0-未占据,1-占据
-
-// todo Scouting info
-static const int SCOUT_OK = 9;                  // 侦查完成认定:距离目标的距离
-static vector<int> ScouterList;                 // 侦查目标列表
-static int LastSeenRound[TAC_TARGETS_N] = {};   // 记录上次观测到的回合数
-static int EnemiesN[TAC_TARGETS_N] = {};        // 记录上次观测时各矿区[敌人]人数
-static int FriendsN[TAC_TARGETS_N] = {};        // 记录上次观测时各矿区[友方]人数
+static const int LEVEL1 = 11;                   // 判断第一界点,低于此不分队
+static const int LEVEL2 = 20;                   // 判断第二界点,高于此推基地
 
 typedef vector<int> ID_LIST;
 // Squad settings
@@ -134,7 +129,6 @@ static vector<ID_LIST> SquadMembers(8, vector<int>(0));            // 各小队�
 
 // Squad list
 static const int SINGLE_MC_LIMIT = 8;           // MC人数max限制
-static const int SINGLE_MD_LIMIT = 2;           // MD人数min限制
 static vector<AssaultSquad *> AllSquads;        // 所有小队,默认初始化后需要调整参数
 
 
@@ -186,6 +180,7 @@ void initilize();                                   // 初始化
 int buyNewCost(int cost_indx);                      // 当前购买新英雄成本,参数为HERO_NAME的索引
 bool canDamage(PUnit *unit, int round=0);           // 单位当前是否可以输出伤害
 bool justBeAttacked(PUnit *test);
+PUnit *getFriendlyUnit(int id);                     // 节省时间
 
 double surviveRounds(PUnit *host, PUnit *guest);    // 计算存活轮数差:host - guest
 PUnit *findID(vector<PUnit *> units, int _id);
@@ -218,9 +213,13 @@ protected:
     void squadSet();                                // 小队成员和目标分配
 
     // OTHER HELPERS
-    int judgeSituation(AssaultSquad *squad);        // 封装接口,根据squad::situation返回
+    int judgeSituation(int squad);        // 封装接口,根据squad::situation返回
     void markTarget(int target);                    // 封装接口,标记待(全体)夺取,放入GetBack
     void callBackupSquad(int needed_n);             // 组织一个小队,回防
+    // squadSet helpers
+    int getTotalLevels(int squad);                  // 获得小队总等级
+    void moveMembers(int from, int to, int n);      // 在小队间移动成员
+    void handle(int squad, int levels, int situ);   // 处理动作
 
     // base actions
     void baseAttack();                              // 基地攻击
@@ -620,7 +619,7 @@ void printSquads() {
     }
 
     // print content
-    for (int i = 0; i < AllSquads.size(); ++i) {
+    for (int i = 0; i < SQUAD_N; ++i) {
         // print title
         logger << left << setw(5) << "TYPE";
         logger << left << setw(5) << "ID";
@@ -856,6 +855,17 @@ bool justBeAttacked(PUnit *test) {
 }
 
 
+PUnit *getFriendlyUnit(int id) {
+    for (int i = 0; i < cur_friends.size(); ++i) {
+        PUnit *u = cur_friends[i];
+        if (id == u->id) {
+            return u;
+        }
+    }
+    return nullptr;
+}
+
+
 int teamAtk(vector<PUnit *> vct) {
     int round_atk = 0;
 
@@ -985,16 +995,17 @@ void Commander::squadSet() {
      */
     // 所有英雄id
     vector<int> all;
-    for (int j = 0; j < cur_friends.size(); ++j) {
-        all.push_back(cur_friends[j]->id);
+    for (int i = 0; i < cur_friends.size(); ++i) {
+        all.push_back(cur_friends[i]->id);
     }
 
     // 释放失守小队的id
-    for (int i = 0; i < SQUAD_N; ++i) {                 // 从i = 2开始扫描
-        if (AllSquads[i]->situation < BAK_MAX) {      // 劣势了
-            SquadMembers[i].clear();
+    for (int j = 0; j < SQUAD_N; ++j) {                 // 从i = 2开始扫描
+        if (AllSquads[j]->situation < BAK_MAX) {      // 劣势了
+            SquadMembers[j].clear();
         }
     }
+
     // 所有已指派的英雄id
     vector<int> assigned;
     for (int k = 0; k < SQUAD_N; ++k) {
@@ -1004,7 +1015,7 @@ void Commander::squadSet() {
         }
     }
 
-    // 求差,得redundant
+    // 求集合差,得redundant
     vector<int> redundant(10);
     sort(all.begin(), all.end());
     sort(assigned.begin(), assigned.end());
@@ -1012,14 +1023,17 @@ void Commander::squadSet() {
     redundant.resize((unsigned long) (it - redundant.begin()));
 
     // 分配redundant到各mc
-    for (int s = 0; s < 2; ++s) {
-        int _space = (int) (SINGLE_MC_LIMIT - SquadMembers[s].size());
-        if (_space > 0) {
-            for (int i = 0; i < _space && !redundant.empty(); ++i) {
-                SquadMembers[s].push_back(redundant.back());
-                redundant.pop_back();
-            }
+    int _space = (int) (SINGLE_MC_LIMIT - SquadMembers[0].size());
+    if (_space > 0) {
+        for (int i = 0; i < _space && !redundant.empty(); ++i) {
+            SquadMembers[0].push_back(redundant.back());
+            redundant.pop_back();
         }
+    }
+
+    // 根据形势判断
+    for (int s = 0; s < SQUAD_N; ++s) {
+        handle(s, getTotalLevels(s), judgeSituation(s));
     }
 
 
@@ -1083,7 +1097,8 @@ void Commander::squadSet() {
 
 /**************************HELPERS************************/
 
-int Commander::judgeSituation(AssaultSquad *squad) {
+int Commander::judgeSituation(int index) {
+    AssaultSquad *squad = AllSquads[index];
     if (squad->situation < BAK_MAX) return -1;
     if (squad->situation > SUP_MIN) return 1;
     return 0;
@@ -1092,6 +1107,39 @@ int Commander::judgeSituation(AssaultSquad *squad) {
 
 void Commander::markTarget(int target) {
     GetBack.push(target);
+}
+
+
+void Commander::callBackupSquad(int needed_n) {
+    int left = needed_n;
+    for (int i = 0; i < SQUAD_N; ++i) {
+        if (i == 1) continue;
+        int call = min(left, (int) SquadMembers[i].size());
+        move(i, 1, call);
+        left -= call;
+        if (left <= 0) return;
+    }
+    SquadTargets[1] = 7 + CAMP;
+}
+
+
+int Commander::getTotalLevels(int squad) {
+    ID_LIST &list = SquadMembers[squad];
+    int _sz = (int) list.size();
+    int total = _sz;
+    for (int i = 0; i < _sz; ++i) {
+        total += getFriendlyUnit(list[i])->level;
+    }
+    return total;
+}
+
+
+void Commander::moveMembers(int from, int to, int n) {
+    for (int i = 0; i < n; ++i) {
+        SquadMembers[to].push_back(SquadMembers[from].back());
+        SquadMembers[from].pop_back();
+    }
+
 }
 
 
@@ -1371,7 +1419,7 @@ void AssaultSquad::setHeroes() {
     int _sz = (int) member_id.size();
     for (int i = 0; i < _sz; ++i) {
         int hero_id = member_id[i];
-        PUnit *unit = console->getUnit(hero_id);
+        PUnit *unit = getFriendlyUnit(hero_id);
         Hero *hero = nullptr;
         switch (unit->typeId) {
             case 3:
@@ -1743,7 +1791,7 @@ void Hero::fastFlee() {
 
 Hero::Hero(int _id, int _hot, int _tactic) :
         id(_id), hot_id(_hot), target_id(_tactic){
-    punit = console->getUnit(id);
+    punit = getFriendlyUnit(_id);
     target = TACTICS[target_id];
     hot = console->getUnit(hot_id);
     type = punit->typeId;
@@ -2144,16 +2192,13 @@ void Scouter::justMove() {
 
 
 /*
+[NO TESTS]
 Update:
-. GetBack tactic vector
-. add callback to recover hp
+. imple. specific details of squadSet()
 
 Fixed bugs:
-. buy_rank should not be const
-. add callback least range
 
 Non-fixed problems:
-. when changing tactics, two mc can't work together
 . if MD lost a mine, no one is going to get it back
 . when too few members, still split!
 
@@ -2161,7 +2206,6 @@ Non-fixed problems:
 . ?do not judge the state properly
 
 . hold camp / destroy camp
-. level up
 
 In 3 branches: HEAD, develop, origin/dev
  */
