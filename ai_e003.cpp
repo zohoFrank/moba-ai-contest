@@ -10,6 +10,7 @@
 #endif
 
 #include "console.h"
+#include <queue>
 #include <random>
 #include <sstream>
 #include <map>
@@ -34,7 +35,7 @@ class MainCarrier; class MineDigger; class BattleScouter;
 static const int BIG_INT = 1 << 12;
 
 static const int TAC_TARGETS_N = 9;         // 7个矿+2个基地
-static const int MINE_NUM_SHIFT = 5;        // 编号偏移
+static const int MINE_NUM_SHIFT = 5;        // 编号偏移,id = tac_id + shift
 
 static const int HERO_COST[] = {
         NEW_HAMMERGUARD_COST, NEW_MASTER_COST, NEW_BERSERKER_COST, NEW_SCOUTER_COST,
@@ -63,9 +64,7 @@ static int CAMP = -1;                       // which camp
 // Commander::levelUp
 static const double LEVEL_UP_COST = 0.5;    // 升级金钱比例
 // Commander::buyNewHero
-static int BUY_RANK = 42134132;             // 请参考hero_name
-// Commander::callBack()
-static const int BACK_BASE = 2;             // 面对多少敌人,基地召回我方英雄
+static const int BUY_RANK = 42134132;       // 请参考hero_name
 
 // clearOldInfo()
 static const int CLEAN_LIMIT = 6;           // 最多保留回合记录
@@ -103,10 +102,11 @@ vector<PUnit *> vi_monsters;                    // 可见野怪
  ************************************************************/
 /* 战术核心 */
 // 7个矿顺序依次是 0-中矿,1-8点,2-10点,3-4点,4-2点,5-西北,6-东南
-static const int SUP_LIMIT = 50;                // 优势判分标准
+static const int SUP_MIN = 50;                  // 优势判分标准
+static const int BAK_MAX = -50;                 // 劣势判分标准
 static vector<int> SuperiorTactics = {0, 1, 2, 3, 4}; // 优势战术
-static const int BAK_LIMIT = -50;               // 劣势判分标准
-static vector<int> BackupTactics = {5, 6};            // 备选战术 player1
+static vector<int> BackupTactics = {5, 6};      // 备选战术 player1
+static queue<int> GetBack;                      // 需要夺回的地点:MD刚失守的,或计划夺取的
 
 // 战术延时
 static int StickRounds = 40;                    // 初始保留战术的时间
@@ -118,8 +118,9 @@ static int TargetState[TAC_TARGETS_N] = {};     // 0-未占据,1-占据
 // todo Scouting info
 static const int SCOUT_OK = 9;                  // 侦查完成认定:距离目标的距离
 static vector<int> ScouterList;                 // 侦查目标列表
-int LastSeenRound[TAC_TARGETS_N] = {};          // 记录上次观测到的回合数
-int EnemiesN[TAC_TARGETS_N] = {};               // 记录上次观测时各矿区人数
+static int LastSeenRound[TAC_TARGETS_N] = {};   // 记录上次观测到的回合数
+static int EnemiesN[TAC_TARGETS_N] = {};        // 记录上次观测时各矿区[敌人]人数
+static int FriendsN[TAC_TARGETS_N] = {};        // 记录上次观测时各矿区[友方]人数
 
 typedef vector<int> ID_LIST;
 // Squad settings
@@ -170,6 +171,7 @@ bool compareLevel(PUnit *a, PUnit *b);
 
 bool operator<(const Pos &a, const Pos &b);
 
+int rangeRandom(int max_no_inclu, int avoid);
 
 // ============== Game and Units ===================
 // Global
@@ -205,12 +207,16 @@ private:
 
     /**********************************************************/
 protected:
-    // HELPERS
+    // CONSTRUCTION
     void getUnits();                                // 获取单位信息
-
     // tactics 顺序不能错!
     void updateSquad();                             // 更新小队信息
     void squadSet();                                // 小队成员和目标分配
+
+    // OTHER HELPERS
+    int judgeSituation(AssaultSquad *squad);        // 封装接口,根据squad::situation返回
+    void markTarget(int target);                    // 封装接口,标记待(全体)夺取,放入GetBack
+    void callBackupSquad(int needed_n);             // 组织一个小队,回防
 
     // base actions
     void baseAttack();                              // 基地攻击
@@ -769,6 +775,16 @@ string int2str(int n) {
 }
 
 
+int rangeRandom(int max_no_inclu, int avoid) {
+    srand((unsigned int) Round);
+    int to = rand() % max_no_inclu;
+    if (to == avoid) {
+        to = ++to % max_no_inclu;
+    }
+    return to;
+}
+
+
 // handling units
 int buyNewCost(int cost_idx) {
     int type = cost_idx + 3;
@@ -890,7 +906,7 @@ Commander::~Commander() {
     releaseVector(vi_monsters);
 }
 
-/**************************Helpers**************************/
+/**************************CON**************************/
 
 void Commander::getUnits() {
     // friends
@@ -949,8 +965,6 @@ void Commander::getUnits() {
 }
 
 
-/*************************Tactics**************************/
-
 void Commander::updateSquad() {
     for (int i = 0; i < SQUAD_N; ++i) {
         AllSquads[i]->roundUpdate();
@@ -972,7 +986,7 @@ void Commander::squadSet() {
 
     // 释放失守小队的id
     for (int i = 0; i < SQUAD_N; ++i) {                 // 从i = 2开始扫描
-        if (AllSquads[i]->situation < BAK_LIMIT) {      // 劣势了
+        if (AllSquads[i]->situation < BAK_MAX) {      // 劣势了
             SquadMembers[i].clear();
         }
     }
@@ -1005,7 +1019,7 @@ void Commander::squadSet() {
 
     // toedit 扫描MC小队,视情况变更目标
     for (int t = 0; t <= 1; ++t) {                      // t-index of MC
-        if (AllSquads[t]->situation < BAK_LIMIT) {       // if lost
+        if (AllSquads[t]->situation < BAK_MAX) {       // if lost
             // change to backup target
             int _sz = (int) BackupTactics.size();
             srand((unsigned int) Round);
@@ -1018,7 +1032,7 @@ void Commander::squadSet() {
 #ifdef TEMP
             logger << ">> ## [cmd] change to BACKUP plan" << endl;
 #endif
-        } else if (AllSquads[t]->situation > SUP_LIMIT) {// if occupied
+        } else if (AllSquads[t]->situation > SUP_MIN) {// if occupied
             if (SquadMembers[t].size() < 4) return;
             // left a MD squad
             for (int i = 2; i <= 5; ++i) {              // 扫描所有MD
@@ -1057,6 +1071,20 @@ void Commander::squadSet() {
 
     // todo 什么时候推基地
 
+}
+
+
+/**************************HELPERS************************/
+
+int Commander::judgeSituation(AssaultSquad *squad) {
+    if (squad->situation < BAK_MAX) return -1;
+    if (squad->situation > SUP_MIN) return 1;
+    return 0;
+}
+
+
+void Commander::markTarget(int target) {
+    GetBack.push(target);
 }
 
 
@@ -1146,16 +1174,37 @@ void Commander::spendMoney() {
 
 
 void Commander::callBack() {
-    // todo 设计成强制设置Hero的Tactic值,暂时认为快速召回没有太大意义
-    // todo 对于小股骚扰效果不佳
-    // 条件判断
-    UnitFilter filter;
-    filter.setAreaFilter(new Circle(MILITARY_BASE_POS[CAMP], MILITARY_BASE_VIEW), "a");
-    filter.setAvoidFilter("Observer", "a");
-    filter.setCampFilter(enemyCamp());
-    int base_en = (int) console->enemyUnits(filter).size();
+    Pos base = MILITARY_BASE_POS[CAMP];
+    int _sz = (int) cur_friends.size();
 
-    // todo 召回方案
+    // 召回升级,每回合只召回一个
+    if (Economy > 1000) {
+        int min_level = BIG_INT;
+        int min_i = -1;
+        for (int i = 0; i < _sz; ++i) {
+            PUnit *u = cur_friends[i];
+            if (u->level < min_level) {
+                min_level = u->level;
+                min_i = i;
+            }
+        }
+        console->callBackHero(cur_friends[min_i], base + Pos(3, 0));
+#ifdef TEMP
+        logger << ">> [cmd] hero being called back to LEVEULUP. id=" << min_i << endl;
+#endif
+    }
+
+    // 召回防守
+    int cnt = 0;
+    for (int j = 0; j < vi_enemies.size(); ++j) {   // 遍历计数,更节省时间
+        Pos p = vi_enemies[j]->pos;
+        if (dis2(p, base) < MILITARY_BASE_VIEW) {
+            cnt++;
+        }
+    }
+    if (cnt > 0) {
+        callBackupSquad(cnt);
+    }
 }
 
 
@@ -2077,11 +2126,11 @@ void Scouter::justMove() {
 
 /*
 Update:
-1. sacrifice
-2. some tiny changes on tactics
+. some helping functions
+. finish the structure of CMD::callBack()
 
 Fixed bugs:
-** Berserker can sacrifice fantasticly!!
+.
 
 Non-fixed problems:
 . when changing tactics, two mc can't work together
@@ -2092,7 +2141,7 @@ Non-fixed problems:
 . ?do not judge the state properly
 
 . hold camp / destroy camp
-. call back and levle up
+. level up
 
 In 3 branches: HEAD, develop, origin/dev
  */
