@@ -6,6 +6,7 @@
 #include <ctime>
 #include <fstream>
 #include <iomanip>
+#include "Pos.h"
 
 #endif
 
@@ -76,9 +77,9 @@ static const int CLEAN_NUMS = 2;            // 超过最多保留记录后,一�
 
 // Hero
 static const double HP_FLEE_ALERT = 0.2;         // 血量预警百分比
-static const double HP_BACK_ALERT = 0.6;         // 回基地补血百分比
+static const double HP_BACK_ALERT = 0.45;         // 回基地补血百分比
 
-static const int BATTLE_RANGE = 625;        // 战区范围
+static const int BATTLE_RANGE = 400;        // 战区范围
 
 // Squad
 static const int MEMBER_LIMIT = 4;          // 小队最多人数
@@ -91,12 +92,9 @@ static Commander *commander = nullptr;
 static int Round = -1;
 static int Economy;                             // 经济
 
-static set<int> EstEnemies;                     // 估计的敌人id
-
 vector<PUnit *> cur_friends;                    // 当前友军英雄
 const PUnit *base;                              // 我的基地
 vector<PUnit *> vi_enemies;                     // 当前可见敌人英雄,不含野怪
-const PUnit *en_base;                           // 敌人基地
 vector<PUnit *> vi_mines;                       // 可见矿(矿的位置是默认的,但状态需要可见才能读取)
 vector<PUnit *> vi_monsters;                    // 可见野怪
 
@@ -117,7 +115,6 @@ static int StickRounds = 40;                    // 初始保留战术的时间
 static int TCounter = StickRounds;              // 设置战术倒计时
 
 // 战局判断
-static int TargetState[TAC_TARGETS_N] = {};     // 0-未占据,1-占据
 static const int LEVEL1 = 8;                   // 判断第一界点,低于此不分队
 static const int LEVEL2 = 18;                   // 判断第二界点,高于此推基地
 
@@ -148,9 +145,6 @@ static ofstream logger("log_info.txt");
 void printUnit(vector<PUnit *> units);
 
 void printHeroList(vector<Hero> units);
-
-template<typename T>
-void printString(vector<T> vct);      // T重载了<<
 
 void printSquads();                     // print AllSquads/SquadMember/SquadTarget
 #endif
@@ -183,11 +177,7 @@ void initilize();                                   // 初始化
 // Unit
 int buyNewCost(int cost_indx);                      // 当前购买新英雄成本,参数为HERO_NAME的索引
 bool canDamage(PUnit *unit, int round=0);           // 单位当前是否可以输出伤害
-bool justBeAttacked(PUnit *test);
 PUnit *getFriendlyUnit(int id);                     // 节省时间
-
-double surviveRounds(PUnit *host, PUnit *guest);    // 计算存活轮数差:host - guest
-PUnit *findID(vector<PUnit *> units, int _id);
 
 // ============== Evaluation ===================
 int teamAtk(vector<PUnit *> vct);
@@ -225,7 +215,7 @@ protected:
     void gatherAll();                               // 聚集所有小队到0号
     bool timeToPush();                              // 推基地时机判断
     void pushEnemyCamp();                           // 推基地
-    void handle(int squad, int levels, int situ);   // 处理动作
+    void handle(int squad, int situ);   // 处理动作
 
     // base actions
     void baseAttack();                              // 基地攻击
@@ -443,6 +433,7 @@ public:
     Master(int _id, int _hot = -1, int _tactic = 0);
     Master(PUnit *me, PUnit *hot = nullptr, int t_id = 0);
 
+    virtual void justMove() override;
     virtual void Emergency() override;
     virtual void Attack() override;
 };
@@ -599,14 +590,6 @@ void printHeroList(vector<Hero *> units) {
         }
         // over
         logger << endl;
-    }
-}
-
-
-template<typename T>
-void printString(vector<T> vct) {
-    for (int i = 0; i < vct.size(); ++i) {
-        logger << vct[i] << endl;
     }
 }
 
@@ -807,34 +790,6 @@ int buyNewCost(int cost_idx) {
 }
 
 
-double surviveRounds(PUnit *host, PUnit *guest) {
-    /*
-     * 计算公式:
-     * 技能杀伤 = 先忽略技能预估战斗轮数,然后计算保守值
-     * 生命恢复 = 本轮全体生命恢复
-     * 死亡回合 = (hp + 生命恢复 - 技能杀伤) / (对方攻击 - 我方防守)
-     */
-    int host_hp_rcv = console->unitArg("hp", "rate", host);
-    int guest_hp_rcv = console->unitArg("hp", "rate", guest);
-    double host_r = 1.0 * (host->hp + host_hp_rcv) / max(host->atk - guest->def, 5);
-    double guest_r = 1.0 * (guest->hp + guest_hp_rcv) / max(guest->atk - host->def, 5);
-    return (host_r - guest_r);
-}
-
-
-PUnit *findID(vector<PUnit *> units, int _id) {
-    if (_id == -1) return nullptr;
-
-    int _sz = (int) units.size();
-    for (int i = 0; i < _sz; ++i) {
-        if (units[i]->id == _id) {
-            return units[i];
-        }
-    }
-    return nullptr;
-}
-
-
 bool canDamage(PUnit *unit, int round) {
     PBuff *dizzy = const_cast<PBuff *>(unit->findBuff("Dizzy"));
     PSkill *attack = const_cast<PSkill *>(unit->findSkill("Attack"));
@@ -848,15 +803,6 @@ bool canDamage(PUnit *unit, int round) {
     } else {
         return false;
     }
-}
-
-
-bool justBeAttacked(PUnit *test) {
-    if (test->findBuff("BeAttacked") &&
-        test->findBuff("BeAttacked")->timeLeft == HURT_LAST_TIME)
-        return true;
-    else
-        return false;
 }
 
 
@@ -921,7 +867,6 @@ Commander::~Commander() {
     releaseVector(cur_friends);
     base = nullptr;
     releaseVector(vi_enemies);
-    en_base = nullptr;
     releaseVector(vi_mines);
     releaseVector(vi_monsters);
 }
@@ -932,8 +877,8 @@ void Commander::getUnits() {
     // friends
     UnitFilter f1;
     f1.setCampFilter(CAMP);
-    f1.setAvoidFilter("MilitaryBase", "a");
-    f1.setAvoidFilter("Observer", "w");
+    f1.setAvoidFilter("MilitaryBase", "w");
+    f1.setAvoidFilter("Observer", "a");
     cur_friends = console->friendlyUnits(f1);
     // base
     base = console->getMilitaryBase();
@@ -941,27 +886,19 @@ void Commander::getUnits() {
     // enemies 没有cleanAll()
     UnitFilter f2;
     f2.setCampFilter(enemyCamp());
-    f2.setAvoidFilter("MilitaryBase", "a");
-    f2.setAvoidFilter("Observer", "w");
+    f2.setAvoidFilter("MilitaryBase", "w");
+    f2.setAvoidFilter("Observer", "a");
     vi_enemies = console->enemyUnits(f2);
-    // en_base
-    UnitFilter f3;
-    f3.setCampFilter(enemyCamp());
-    f3.setTypeFilter("MilitaryBase", "a");
-    vector<PUnit *> fi_units = console->enemyUnits(f3);
-    if (fi_units.size() != 0 && fi_units[0]->isBase()) {
-        en_base = fi_units[0];
-    }
 
     // vi_mines
     UnitFilter f4;
-    f4.setTypeFilter("Mine", "a");
+    f4.setTypeFilter("Mine", "w");
     vi_mines = console->enemyUnits(f4);
     // vi_monsters
     UnitFilter f5;
     f5.cleanAll();
-    f5.setTypeFilter("Dragon", "a");
-    f5.setTypeFilter("Roshan", "w");
+    f5.setTypeFilter("Dragon", "w");
+    f5.setTypeFilter("Roshan", "a");
     vi_monsters = console->enemyUnits(f5);
 
 #ifdef LOG
@@ -1038,65 +975,8 @@ void Commander::squadSet() {
 
     // 根据形势判断
     for (int s = 0; s < SQUAD_N; ++s) {
-        handle(s, getTotalLevels(s), judgeSituation(s));
+        handle(s, 0);
     }
-
-
-    /*
-    // toedit 扫描MC小队,视情况变更目标
-    for (int t = 0; t <= 1; ++t) {                      // t-index of MC
-        if (AllSquads[t]->situation < BAK_MAX) {       // if lost
-            // change to backup target
-            int _sz = (int) BackupTactics.size();
-            srand((unsigned int) Round);
-            int new_t = BackupTactics[rand() % _sz];
-            if (new_t == SquadTargets[t]) {
-                new_t = ++new_t % _sz;
-            }
-            SquadTargets[t] = new_t;
-            AllSquads[t]->resetTacMonitor(StickRounds);
-#ifdef TEMP
-            logger << ">> ## [cmd] change to BACKUP plan" << endl;
-#endif
-        } else if (AllSquads[t]->situation > SUP_MIN) {// if occupied
-            if (SquadMembers[t].size() < 4) return;
-            // left a MD squad
-            for (int i = 2; i <= 5; ++i) {              // 扫描所有MD
-                if (SquadMembers[i].empty()) {          // 发现空MD
-                    if (SquadTargets[t] == 0) {         // 中间矿留一个
-                        SquadMembers[i].push_back(SquadMembers[t].back());
-                        SquadMembers[t].pop_back();
-                    } else {                            // 野矿留两个
-                        for (int j = 0; j < SINGLE_MD_LIMIT; ++j) {
-                            SquadMembers[i].push_back(SquadMembers[t].back());
-                            SquadMembers[t].pop_back();
-                        }
-                    }
-                    SquadTargets[i] = SquadTargets[t];  // 设target
-                    AllSquads[i]->resetTacMonitor(0);   // reset
-#ifdef TEMP
-                    logger << "## [cmd] spare a MD" << endl;
-#endif
-                    break;                              // 一个MD就够了!
-                }
-            }
-            // and change MC to another superior target
-            int _sz = (int) SuperiorTactics.size();
-            srand((unsigned int) Round);
-            int new_t = SuperiorTactics[rand() % _sz];
-            if (new_t == SquadTargets[t]) {
-                new_t = ++new_t % _sz;
-            }
-            SquadTargets[t] = new_t;
-            AllSquads[t]->resetTacMonitor(StickRounds);
-#ifdef TEMP
-            logger << ">> ## [cmd] change to SUPERIOR plan" << endl;
-#endif
-        }
-    }
-
-    // todo 什么时候推基地
-    */
 }
 
 
@@ -1140,11 +1020,11 @@ int Commander::getTotalLevels(int squad) {
 
 
 void Commander::moveMembers(int from, int to, int n) {
-    for (int i = 0; i < n; ++i) {
+    int move_n = min(n, (int) SquadMembers[from].size());
+    for (int i = 0; i < move_n; ++i) {
         SquadMembers[to].push_back(SquadMembers[from].back());
         SquadMembers[from].pop_back();
     }
-
 }
 
 
@@ -1168,42 +1048,29 @@ bool Commander::timeToPush() {
 
 
 void Commander::pushEnemyCamp() {
-    int tac = 7 + CAMP;
+    int tac = 7 + enemyCamp();
     gatherAll();
     SquadTargets[0] = tac;
     AllSquads[0]->resetTacMonitor(StickRounds);
 }
 
 
-void Commander::handle(int squad, int levels, int situ) {
-    int phase;
-    if (levels < LEVEL1) {
-        phase = 0;
-    } else if (levels > LEVEL1 && levels < LEVEL2) {
-        phase = 1;
-    } else {
-        phase = 2;
-    }
-
+void Commander::handle(int squad, int situ) {
     /*
      * timeToPush() -> push
-     * (^2, 0) -> nothing
+     * (0) -> nothing
      * i = 0
-     * (0, ^0) -> change target but not members
-     * (>0, 1) -> left a MD, change target
-     * (>0, -1) -> change target but not members
+     * (1) -> left a MD, change target
+     * (-1) -> change target but not members
      * i > 1, phase == 0
-     * (0, ^-1) -> nothing
-     * (0, -1) -> dismiss and push getback
+     * (^-1) -> nothing
+     * (-1) -> dismiss and push getback
      */
     int now = SquadTargets[squad];
     int sup_sz = (int) SuperiorTactics.size();
     int bak_sz = (int) BackupTactics.size();
 
-    if (timeToPush()) {
-        pushEnemyCamp();
-        return;
-    }
+
 
     if (!GetBack.empty()) {
         int tac = GetBack.front();
@@ -1215,7 +1082,7 @@ void Commander::handle(int squad, int levels, int situ) {
         SquadTargets[0] = tac;
         AllSquads[0]->resetTacMonitor(StickRounds);
 #ifdef TEMP
-        logger << ">> [cmd] lost a MD: gather all and fight!" << endl;
+        logger << ">> [cmd::handle] lost a MD: gather all and fight!" << endl;
 #endif
     }
 
@@ -1223,27 +1090,22 @@ void Commander::handle(int squad, int levels, int situ) {
         || (squad > MC_I && situ < 1)) {
         // do nothing
 #ifdef TEMP
-        logger << ">> [cmd] gluing: do nothing" << endl;
+        logger << ">> [cmd::handle] gluing: do nothing" << endl;
 #endif
         return;
     }
 
-    if ((squad == 0 && phase == 0 && situ != 0)
-        || (squad > MC_I && phase > 0 && situ == -1)) {
+    if (squad <= MD_I && situ == -1) {
         // change target but not members
-        if (situ == 1) {        // superior
-            SquadTargets[squad] = SuperiorTactics[rangeRandom(sup_sz, now)];
-        } else {                // situ = -1, backup
-            SquadTargets[squad] = BackupTactics[rangeRandom(bak_sz, now)];
-        }
+        SquadTargets[squad] = BackupTactics[rangeRandom(bak_sz, now)];
         AllSquads[squad]->resetTacMonitor(StickRounds);
 #ifdef TEMP
-        logger << ">> [cmd] too few members: change!" << endl;
+        logger << ">> [cmd::handle] situ = -1: change to backup tactic" << endl;
 #endif
         return;
     }
 
-    if (squad == 0 && phase > 0 && situ == 1) {
+    if (squad == 0 && situ == 1) {
         // left a MD and change target (SUP)
         int change_n;       // 留下的md人数
         if (now == 0) {     // 如果是中矿
@@ -1283,7 +1145,7 @@ void Commander::handle(int squad, int levels, int situ) {
 void Commander::baseAttack() {
     Pos our_base = MILITARY_BASE_POS[CAMP];
     UnitFilter filter;
-    filter.setAreaFilter(new Circle(our_base, MILITARY_BASE_RANGE), "a");
+    filter.setAreaFilter(new Circle(our_base, MILITARY_BASE_RANGE), "w");
     vector<PUnit *> enemies = console->enemyUnits(filter);
     if (enemies.empty()) return;
 
@@ -1314,23 +1176,15 @@ void Commander::levelUp() {  // toedit 主要策略点
      * 1. 每回合只升级每个英雄最多一次
      * 2. 从升级花费最少的英雄开始
      */
-    // 只有靠近的单位才能升级
-    UnitFilter filter;
-    filter.setAreaFilter(new Circle(base->pos, LEVELUP_RANGE), "a");
-    filter.setLevelFilter(0, 6);
-    vector<PUnit *> nearHeroes = console->friendlyUnits(filter);
-
-    if (nearHeroes.size() == 0) {
+    if (cur_friends.size() < 8)
         return;
-    }
-
     // 按等级从小到大排序
-    sort(nearHeroes.begin(), nearHeroes.end(), compareLevel);
+    sort(cur_friends.begin(), cur_friends.end(), compareLevel);
     vector<PUnit *> toLevelUp;
     int round_cost = 0;
 
     // 贪心
-    int _sz = (int) nearHeroes.size();
+    int _sz = (int) cur_friends.size();
     for (int i = 0; i < _sz; ++i) {
         if (round_cost >= LEVEL_UP_COST * Economy) {
             if (!toLevelUp.empty()) {
@@ -1338,8 +1192,8 @@ void Commander::levelUp() {  // toedit 主要策略点
             }
             break;
         }
-        round_cost += console->levelUpCost(nearHeroes[i]->level);
-        toLevelUp.push_back(nearHeroes[i]);
+        round_cost += console->levelUpCost(cur_friends[i]->level);
+        toLevelUp.push_back(cur_friends[i]);
     }
 
     // 结算
@@ -1366,25 +1220,6 @@ void Commander::spendMoney() {
 void Commander::callBack() {
     Pos base = MILITARY_BASE_POS[CAMP];
     int _sz = (int) cur_friends.size();
-
-    // 召回升级,每回合只召回一个
-    if (Economy > CALLBACK_LVLUP) {
-        int min_level = BIG_INT;
-        int min_i = -1;
-        for (int i = 0; i < _sz; ++i) {
-            PUnit *u = cur_friends[i];
-            if (u->level < min_level && dis2(u->pos, base) > CALLBACK_MIN_DIST2) {
-                min_level = u->level;
-                min_i = i;
-            }
-        }
-        if (min_i != -1) {
-            console->callBackHero(cur_friends[min_i], base + Pos(3, 0));
-#ifdef TEMP
-            logger << ">> [cmd] hero being called back to LEVEULUP. id=" << min_i << endl;
-#endif
-        }
-    }
 
     // 召回补血
     if (Economy > CALLBACK_RECV_HP) {
@@ -1454,9 +1289,9 @@ void AssaultSquad::getAllCmdInfo() {
 void AssaultSquad::getUnits() {
     Pos tar = TACTICS[target_id];
     UnitFilter filter;
-    filter.setAreaFilter(new Circle(tar, battle_range), "a");
-    filter.setAvoidFilter("Observer", "a");
-    filter.setAvoidFilter("Mine", "w");
+    filter.setAreaFilter(new Circle(tar, battle_range), "w");
+    filter.setAvoidFilter("Observer", "w");
+    filter.setAvoidFilter("Mine", "a");
     filter.setHpFilter(1, 100000);
 
     // 根据战术目标,设定打击单位范围
@@ -1503,7 +1338,7 @@ void AssaultSquad::lockHot() {
 
     // 寻找最弱单位
     int index = -1;
-    double min = INT_MAX;
+    double min = BIG_INT;
     // 特殊buff
     int _sz = (int) sector_en.size();
     for (int i = 0; i < _sz; ++i) {
@@ -1710,7 +1545,7 @@ void MainCarrier::evaluateSituation() {
     int _sz_e = (int) sector_en.size();
 
     // 没有人,negative,扣分
-    if (_sz_f == 0) {
+    if (_sz_f == 0 || (_sz_f == 1 && target_id == (enemyCamp() + 7))) {
         situation -= BIG_INT;
         return;
     }   // assert: _sz_f != 0
@@ -1765,7 +1600,7 @@ void MineDigger::evaluateSituation() {
     int _sz_e = (int) sector_en.size();
 
     // 敌人人数占优或者矿连续没有能量,negative
-    if (_sz_e - _sz_f > 1 || mine_energy < 2) {
+    if (_sz_e - _sz_f > 1 || _sz_f == 0) {
         situation -= BIG_INT;
         return;
     }
@@ -1840,7 +1675,7 @@ PUnit *Hero::nearestEnemy() const {
     if (_sz == 0)
         return nullptr;
 
-    int min_dist = INT_MAX;
+    int min_dist = BIG_INT;
     PUnit *selected = nullptr;
 
     for (int i = 0; i < _sz; ++i) {
@@ -2014,7 +1849,7 @@ void Hero::HeroAct() {
 }
 
 
-void Hero::justMove() { // assert: out of field or hot = nullptr
+void Hero::justMove() {     // assert: out of field or hot = nullptr
     if (hp < HP_BACK_ALERT * punit->max_hp) {
         console->move(MILITARY_BASE_POS[CAMP], punit);
     } else {
@@ -2209,6 +2044,22 @@ Master::Master(PUnit *me, PUnit *hot, int t_id) :
         Hero(me, hot, t_id) { }
 
 
+void Master::justMove() {   // assert: out of field or hot = nullptr
+    if (hp < HP_BACK_ALERT * punit->max_hp) {
+        console->move(MILITARY_BASE_POS[CAMP], punit);
+    } else if (can_skill) {
+        Pos p = parallelChangePos(pos, target, BLINK_RANGE, false);
+        console->useSkill("Blink", p, punit);
+    } else {
+        console->move(target, punit);
+#ifdef LOG
+        logger << "[mov] move to ";
+        logger << target << endl;
+#endif
+    }
+}
+
+
 void Master::Emergency() {
     if (Hero::timeToFlee()) {
         emergency = true;
@@ -2218,7 +2069,7 @@ void Master::Emergency() {
 
     if (outOfField() || hot == nullptr) {
         emergency = true;
-        Hero::justMove();
+        justMove();
         return;
     }
 
@@ -2262,8 +2113,8 @@ Pos Scouter::observeTarget() {
         int dist2 = dis2(pos, OBSERVE_POS[i]);
         if (dist2 < SET_OBSERVER_RANGE) {
             UnitFilter filter;
-            filter.setAreaFilter(new Circle(OBSERVE_POS[i], OBSERVER_VIEW), "a");
-            filter.setTypeFilter("Observer", "a");
+            filter.setAreaFilter(new Circle(OBSERVE_POS[i], OBSERVER_VIEW), "w");
+            filter.setTypeFilter("Observer", "w");
             vector<PUnit *> observers = console->friendlyUnits(filter);
             if (!observers.empty()) {
                 return OBSERVE_POS[i];
@@ -2327,20 +2178,28 @@ void Scouter::justMove() {
 
 
 /*
-[NO TESTS]
+[TESTED]
 Update:
-. imple. squadSet()
+. clean some redundant variables
+. MD evaluation situ
+. add blink when master moves
 
 Fixed bugs:
+. level up
+. MD do not leave mine so easily
+. push the right camp
+. make moveMembers() robust
+. call back to level up
 
 Non-fixed problems:
-. if MD lost a mine, no one is going to get it back
+. !! FIRST WAVE
+. !! tactics not applied
+. ?if MD lost a mine, no one is going to get it back
 . when too few members, still split!
 
-. members are too separate
-. ?do not judge the state properly
+. positions are too separate
 
-. hold camp / destroy camp
+. ?hold camp
 
 In 3 branches: HEAD, develop, origin/dev
  */
