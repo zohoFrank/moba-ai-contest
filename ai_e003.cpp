@@ -1463,8 +1463,12 @@ void AssaultSquad::setHeroes() {
 /*************************Actions****************************/
 
 void AssaultSquad::crossBesiege() {
-    if (hot == nullptr || besiege == false)
+    if (hot == nullptr || besiege == false) {
+        for (int i = 0; i < members.size(); ++i) {
+            members[i]->HeroAct();
+        }
         return;            // 没人就算了
+    }
 
     const Pos onPosition[] = {Pos(1, 0), Pos(-1, 0), Pos(0, 1), Pos(0, -1),
                               Pos(1, 1), Pos(-1, -1), Pos(1, -1), Pos(-1, 1)};
@@ -1476,7 +1480,7 @@ void AssaultSquad::crossBesiege() {
         members[i]->besiege = true;                 // 先设定besiege标志
 
         if (unit->pos != rightPos) {
-            target = rightPos;                      // warn 下一轮target又会更新,应该不用担心
+            members[i]->target = rightPos;                      // warn 下一轮target又会更新,应该不用担心
         }
 
         // 通过接口执行,避免不必要的误判 warn 不通过console破坏封装
@@ -1497,7 +1501,7 @@ void AssaultSquad::slipAttack() {
 /*************************Cmd load****************************/
 
 void AssaultSquad::setBesiege() {
-    if (members.size() < 3) {
+    if (sector_f.size() < 3) {
         besiege = false;
     } else {
         besiege = true;
@@ -1523,10 +1527,10 @@ AssaultSquad::AssaultSquad(int _id) {
 
     // setting
     stick_counter--;
-    setBesiege();
     getUnits();
     lockHot();
     setHeroes();
+    setBesiege();
 }
 
 
@@ -1545,10 +1549,10 @@ void AssaultSquad::roundUpdate() {
     // setting
     stick_counter--;
     setOthers();
-    setBesiege();
     getUnits();
     lockHot();
     setHeroes();
+    setBesiege();
     evaluateSituation();
 }
 
@@ -2230,6 +2234,7 @@ void Scouter::justMove() {
 [TESTED]
 Update:
 . cdwalk
+. crossBesiege
 
 Fixed bugs:
 . defend base thief
@@ -2245,7 +2250,8 @@ Non-fixed problems:
 TODO:
 . when taken control of center mine, take turns to come back and lvlup
 . level up strategy
-. other tactics
+. make new mines
+. !!dragging for backup heroes when lack of units
 
 
  */
