@@ -1060,8 +1060,6 @@ void Commander::handle(int squad, int situ) {
 
     if (timeToPush()) {
         pushEnemyCamp();
-    } else {
-        SquadTargets[0] = 0;
     }
     return;
 
@@ -1274,7 +1272,7 @@ void Commander::callBack() {
     int cnt = 0;
     for (int j = 0; j < vi_enemies.size(); ++j) {   // 遍历计数,更节省时间
         Pos p = vi_enemies[j]->pos;
-        if (dis2(p, base) < MILITARY_BASE_VIEW) {
+        if (dis2(p, base) < MILITARY_BASE_VIEW * 2) {
             cnt++;
         }
     }
@@ -1772,7 +1770,7 @@ void Hero::cdWalk() {       // toedit 主要策略点
 
     Pos ref_p = nearest->pos;               // position of reference
     // 撤离的距离为保持两者间距一个speed
-    Pos far_p = parallelChangePos(pos, ref_p, speed / 2, true);
+    Pos far_p = parallelChangePos(pos, ref_p, speed, true);
     console->move(far_p, punit);        // go
 }
 
@@ -2231,18 +2229,17 @@ void Scouter::justMove() {
 /*
 [TESTED]
 Update:
-. simple tactics now
-. recover level up
+. cdwalk
 
 Fixed bugs:
-. callBack()
-. hammerguard attacks base
+. defend base thief
 
 Non-fixed problems:
-. !! FIRST WAVE
 . !! level up!
 . !! master blink
+. !! keep pushing
 
+. FIRST WAVE
 . positions are too separate
 
 TODO:
