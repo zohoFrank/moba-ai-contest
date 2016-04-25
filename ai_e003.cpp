@@ -996,15 +996,16 @@ void Commander::markTarget(int target) {
 
 
 void Commander::callBackupSquad(int needed_n) {
-    int left = needed_n;
-    for (int i = 0; i < SQUAD_N; ++i) {
-        if (i == 1) continue;
-        int call = min(left, (int) SquadMembers[i].size());
-        moveMembers(i, 1, call);
-        left -= call;
-        if (left <= 0) return;
+    int left = (int) (needed_n - SquadMembers[0].size());
+    if (left > 0) {
+        for (int i = 1; i < SQUAD_N; ++i) {
+            int call = min(left, (int) SquadMembers[i].size());
+            moveMembers(i, 0, call);
+            left -= call;
+            if (left <= 0) return;
+        }
     }
-    SquadTargets[1] = 7 + CAMP;
+    SquadTargets[0] = 7 + CAMP;
 }
 
 
@@ -1056,6 +1057,16 @@ void Commander::pushEnemyCamp() {
 
 
 void Commander::handle(int squad, int situ) {
+
+
+    if (timeToPush()) {
+        pushEnemyCamp();
+    } else {
+        SquadTargets[0] = 0;
+    }
+    return;
+
+    /* unreachable code */
     /*
      * timeToPush() -> push
      * (0) -> nothing
@@ -1069,8 +1080,6 @@ void Commander::handle(int squad, int situ) {
     int now = SquadTargets[squad];
     int sup_sz = (int) SuperiorTactics.size();
     int bak_sz = (int) BackupTactics.size();
-
-
 
     if (!GetBack.empty()) {
         int tac = GetBack.front();
@@ -1241,6 +1250,8 @@ void Commander::callBack() {
     }
     if (cnt > 0) {
         callBackupSquad(cnt);
+    } else {
+        SquadTargets[0] = 0;
     }
 }
 
@@ -1880,7 +1891,7 @@ void Hero::printAtkInfo() const {
 bool HammerGuard::timeToSkill() {
     int dist2 = dis2(hot->pos, pos);
     bool under_fire = dist2 < HAMMERATTACK_RANGE;
-    if (can_skill && under_fire) {
+    if (can_skill && under_fire && !hot->isBase()) {
         return true;
     } else {
         return false;
@@ -2180,26 +2191,15 @@ void Scouter::justMove() {
 /*
 [TESTED]
 Update:
-. clean some redundant variables
-. MD evaluation situ
-. add blink when master moves
+. simple tactics now
 
 Fixed bugs:
-. level up
-. MD do not leave mine so easily
-. push the right camp
-. make moveMembers() robust
-. call back to level up
+. callBack()
 
 Non-fixed problems:
 . !! FIRST WAVE
-. !! tactics not applied
-. ?if MD lost a mine, no one is going to get it back
-. when too few members, still split!
 
 . positions are too separate
-
-. ?hold camp
 
 In 3 branches: HEAD, develop, origin/dev
  */
