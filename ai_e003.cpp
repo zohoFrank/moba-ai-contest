@@ -2251,6 +2251,5 @@ TODO:
 . other tactics
 
 
-In 3 branches: HEAD, develop, origin/dev
  */
 
