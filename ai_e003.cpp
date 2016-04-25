@@ -118,8 +118,8 @@ static int TCounter = StickRounds;              // 设置战术倒计时
 
 // 战局判断
 static int TargetState[TAC_TARGETS_N] = {};     // 0-未占据,1-占据
-static const int LEVEL1 = 11;                   // 判断第一界点,低于此不分队
-static const int LEVEL2 = 20;                   // 判断第二界点,高于此推基地
+static const int LEVEL1 = 8;                   // 判断第一界点,低于此不分队
+static const int LEVEL2 = 18;                   // 判断第二界点,高于此推基地
 
 typedef vector<int> ID_LIST;
 // Squad settings
@@ -133,6 +133,7 @@ static vector<AssaultSquad *> AllSquads;        // 所有小队,默认初始化�
 static const int MC_I = 1;
 static const int MD_I = 5;
 static const int BS_I = 7;
+static const int SCOUT_OK = 5;                  // 侦查完成的最大距离
 
 
 
@@ -156,9 +157,8 @@ void printSquads();                     // print AllSquads/SquadMember/SquadTarg
 
 // =============== Basic Algorithms ================
 // Path finding
-void modifyTactic(int *tactics, int size);                // 对于player1和0的区别,修改战术
 Pos parallelChangePos(const Pos &origin, const Pos &reference, int len2, bool away = true);  // 详见实现
-Pos verticalChangePos(const Pos &origin, const Pos &reference, int len2, bool clockwize = true);  //详见实现
+Pos verticalChangePos(const Pos &origin, const Pos &reference, int len2);  //详见实现
 
 // String and int transfer
 int str2int(string str);
@@ -201,7 +201,6 @@ double unitDefScore(PUnit *pu);                     // 给单位的实际防守�
 // 全局指挥官,分析形势,买活,升级,召回等,也充当本方base角色
 // 更新不同战区信息,units可以领任务,然后形成team
 // global_state: inferior, equal, superior
-// todo 缺少一个判断或者参数,分配各小队人数的时候作为参考
 class Commander {
 private:
     vector<PUnit *> sector_en;
@@ -223,6 +222,7 @@ protected:
     // squadSet helpers
     int getTotalLevels(int squad);                  // 获得小队总等级
     void moveMembers(int from, int to, int n);      // 在小队间移动成员
+    void gatherAll();                               // 聚集所有小队到0号
     bool timeToPush();                              // 推基地时机判断
     void pushEnemyCamp();                           // 推基地
     void handle(int squad, int levels, int situ);   // 处理动作
@@ -692,8 +692,7 @@ Pos parallelChangePos(
 Pos verticalChangePos(
         const Pos &origin,
         const Pos &reference,
-        int len2,
-        bool clockwize
+        int len2
 ) {
     double len = sqrt(len2 * 1.0);
     Pos ref = reference - origin;
@@ -1121,7 +1120,7 @@ void Commander::callBackupSquad(int needed_n) {
     for (int i = 0; i < SQUAD_N; ++i) {
         if (i == 1) continue;
         int call = min(left, (int) SquadMembers[i].size());
-        move(i, 1, call);
+        moveMembers(i, 1, call);
         left -= call;
         if (left <= 0) return;
     }
@@ -1149,6 +1148,33 @@ void Commander::moveMembers(int from, int to, int n) {
 }
 
 
+void Commander::gatherAll() {
+    // move all to squad 0
+    for (int i = 1; i < SQUAD_N; ++i) {
+        int _sz = (int) SquadMembers[i].size();
+        moveMembers(i, 0, _sz);
+    }
+}
+
+
+bool Commander::timeToPush() {
+    int _sz = (int) cur_friends.size();
+    int total_lvls = _sz;
+    for (int i = 0; i < _sz; ++i) {
+        total_lvls += cur_friends[i]->level;
+    }
+    return (total_lvls > LEVEL2);
+}
+
+
+void Commander::pushEnemyCamp() {
+    int tac = 7 + CAMP;
+    gatherAll();
+    SquadTargets[0] = tac;
+    AllSquads[0]->resetTacMonitor(StickRounds);
+}
+
+
 void Commander::handle(int squad, int levels, int situ) {
     int phase;
     if (levels < LEVEL1) {
@@ -1170,30 +1196,84 @@ void Commander::handle(int squad, int levels, int situ) {
      * (0, ^-1) -> nothing
      * (0, -1) -> dismiss and push getback
      */
+    int now = SquadTargets[squad];
+    int sup_sz = (int) SuperiorTactics.size();
+    int bak_sz = (int) BackupTactics.size();
 
     if (timeToPush()) {
         pushEnemyCamp();
         return;
     }
 
+    if (!GetBack.empty()) {
+        int tac = GetBack.front();
+        // clear
+        while (!GetBack.empty()) {
+            GetBack.pop();
+        }
+        gatherAll();
+        SquadTargets[0] = tac;
+        AllSquads[0]->resetTacMonitor(StickRounds);
+#ifdef TEMP
+        logger << ">> [cmd] lost a MD: gather all and fight!" << endl;
+#endif
+    }
+
     if (situ == 0
         || (squad > MC_I && situ < 1)) {
         // do nothing
+#ifdef TEMP
+        logger << ">> [cmd] gluing: do nothing" << endl;
+#endif
         return;
     }
 
     if ((squad == 0 && phase == 0 && situ != 0)
         || (squad > MC_I && phase > 0 && situ == -1)) {
         // change target but not members
-
+        if (situ == 1) {        // superior
+            SquadTargets[squad] = SuperiorTactics[rangeRandom(sup_sz, now)];
+        } else {                // situ = -1, backup
+            SquadTargets[squad] = BackupTactics[rangeRandom(bak_sz, now)];
+        }
+        AllSquads[squad]->resetTacMonitor(StickRounds);
+#ifdef TEMP
+        logger << ">> [cmd] too few members: change!" << endl;
+#endif
+        return;
     }
 
     if (squad == 0 && phase > 0 && situ == 1) {
         // left a MD and change target (SUP)
+        int change_n;       // 留下的md人数
+        if (now == 0) {     // 如果是中矿
+            change_n = 1;
+        } else {
+            change_n = 3;
+        }
+        // .left a MD
+        int md_i = 0;
+        for (int i = MC_I + 1; i <= MD_I; ++i) {
+            if (SquadMembers[i].empty()) {
+                moveMembers(squad, i, change_n);
+                md_i = i;
+                break;
+            }
+        }
+        if (md_i == 0) return;      // md都满了,不太可能 fixme 不鲁棒点
+        // .change targets
+        SquadTargets[md_i] = SquadTargets[squad];
+        SquadTargets[squad] = SuperiorTactics[rangeRandom(sup_sz, now)];
+        AllSquads[squad]->resetTacMonitor(StickRounds);
+        return;
     }
 
     if (squad > MC_I && situ == -1) {
         // dismiss, mark a getback
+        SquadMembers[squad].clear();
+        SquadTargets[squad] = 0;
+        AllSquads[squad]->resetTacMonitor(StickRounds);
+        return;
     }
 }
 
@@ -2249,7 +2329,7 @@ void Scouter::justMove() {
 /*
 [NO TESTS]
 Update:
-. build a framework of squadSet()
+. imple. squadSet()
 
 Fixed bugs:
 
