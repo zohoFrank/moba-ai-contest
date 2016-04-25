@@ -68,7 +68,7 @@ static const double LEVEL_UP_COST = 0.5;    // 升级金钱比例
 static int BUY_RANK = 42314312;             // 请参考hero_name
 // callBack
 static const int CALLBACK_MIN_DIST2 = 600;  // 召回的必要最小距离
-static const int CALLBACK_LVLUP = 800;      // 召回升级的最小经济水平
+static const int CALLBACK_LVLUP = 2000;      // 召回升级的最小经济水平
 static const int CALLBACK_RECV_HP = 2000;   // 召回补血的最小经济水平
 
 // clearOldInfo()
@@ -93,7 +93,7 @@ static int Round = -1;
 static int Economy;                             // 经济
 
 vector<PUnit *> cur_friends;                    // 当前友军英雄
-const PUnit *base;                              // 我的基地
+// 我的基地
 vector<PUnit *> vi_enemies;                     // 当前可见敌人英雄,不含野怪
 vector<PUnit *> vi_mines;                       // 可见矿(矿的位置是默认的,但状态需要可见才能读取)
 vector<PUnit *> vi_monsters;                    // 可见野怪
@@ -865,7 +865,6 @@ Commander::Commander() {
 Commander::~Commander() {
     // PUnit*不能释放!
     releaseVector(cur_friends);
-    base = nullptr;
     releaseVector(vi_enemies);
     releaseVector(vi_mines);
     releaseVector(vi_monsters);
@@ -881,7 +880,7 @@ void Commander::getUnits() {
     f1.setAvoidFilter("Observer", "a");
     cur_friends = console->friendlyUnits(f1);
     // base
-    base = console->getMilitaryBase();
+    console->getMilitaryBase();
 
     // enemies 没有cleanAll()
     UnitFilter f2;
@@ -996,15 +995,16 @@ void Commander::markTarget(int target) {
 
 
 void Commander::callBackupSquad(int needed_n) {
-    int left = needed_n;
-    for (int i = 0; i < SQUAD_N; ++i) {
-        if (i == 1) continue;
-        int call = min(left, (int) SquadMembers[i].size());
-        moveMembers(i, 1, call);
-        left -= call;
-        if (left <= 0) return;
+    int left = (int) (needed_n - SquadMembers[0].size());
+    if (left > 0) {
+        for (int i = 1; i < SQUAD_N; ++i) {
+            int call = min(left, (int) SquadMembers[i].size());
+            moveMembers(i, 0, call);
+            left -= call;
+            if (left <= 0) return;
+        }
     }
-    SquadTargets[1] = 7 + CAMP;
+    SquadTargets[0] = 7 + CAMP;
 }
 
 
@@ -1056,6 +1056,16 @@ void Commander::pushEnemyCamp() {
 
 
 void Commander::handle(int squad, int situ) {
+
+
+    if (timeToPush()) {
+        pushEnemyCamp();
+    } else {
+        SquadTargets[0] = 0;
+    }
+    return;
+
+    /* unreachable code */
     /*
      * timeToPush() -> push
      * (0) -> nothing
@@ -1069,8 +1079,6 @@ void Commander::handle(int squad, int situ) {
     int now = SquadTargets[squad];
     int sup_sz = (int) SuperiorTactics.size();
     int bak_sz = (int) BackupTactics.size();
-
-
 
     if (!GetBack.empty()) {
         int tac = GetBack.front();
@@ -1176,15 +1184,27 @@ void Commander::levelUp() {  // toedit 主要策略点
      * 1. 每回合只升级每个英雄最多一次
      * 2. 从升级花费最少的英雄开始
      */
-    if (cur_friends.size() < 8)
+    if (Round < 20) {
         return;
+    }
+
+    UnitFilter filter;
+    filter.setAreaFilter(new Circle(MILITARY_BASE_POS[CAMP], LEVELUP_RANGE), "a");
+    filter.setLevelFilter(0, 6);
+    vector<PUnit *> nearHeroes = console->friendlyUnits(filter);
+
+    if (nearHeroes.size() == 0) {
+        return;
+    }
+
     // 按等级从小到大排序
-    sort(cur_friends.begin(), cur_friends.end(), compareLevel);
+    sort(nearHeroes.begin(), nearHeroes.end(), compareLevel);
     vector<PUnit *> toLevelUp;
     int round_cost = 0;
 
+
     // 贪心
-    int _sz = (int) cur_friends.size();
+    int _sz = (int) nearHeroes.size();
     for (int i = 0; i < _sz; ++i) {
         if (round_cost >= LEVEL_UP_COST * Economy) {
             if (!toLevelUp.empty()) {
@@ -1192,8 +1212,8 @@ void Commander::levelUp() {  // toedit 主要策略点
             }
             break;
         }
-        round_cost += console->levelUpCost(cur_friends[i]->level);
-        toLevelUp.push_back(cur_friends[i]);
+        round_cost += console->levelUpCost(nearHeroes[i]->level);
+        toLevelUp.push_back(nearHeroes[i]);
     }
 
     // 结算
@@ -1221,6 +1241,25 @@ void Commander::callBack() {
     Pos base = MILITARY_BASE_POS[CAMP];
     int _sz = (int) cur_friends.size();
 
+    // 召回升级,每回合只召回一个
+    if (Economy > CALLBACK_LVLUP) {
+        int min_level = BIG_INT;
+        int min_i = -1;
+        for (int i = 0; i < _sz; ++i) {
+            PUnit *u = cur_friends[i];
+            if (u->level < min_level && dis2(u->pos, base) > CALLBACK_MIN_DIST2) {
+                min_level = u->level;
+                min_i = i;
+            }
+        }
+        if (min_i != -1) {
+            console->callBackHero(cur_friends[min_i], base + Pos(3, 0));
+#ifdef TEMP
+            logger << ">> [cmd] hero being called back to LEVEULUP. id=" << min_i << endl;
+#endif
+        }
+    }
+
     // 召回补血
     if (Economy > CALLBACK_RECV_HP) {
         for (auto i = cur_friends.begin(); i != cur_friends.end(); ++i) {
@@ -1241,6 +1280,8 @@ void Commander::callBack() {
     }
     if (cnt > 0) {
         callBackupSquad(cnt);
+    } else {
+        SquadTargets[0] = 0;
     }
 }
 
@@ -1324,6 +1365,12 @@ void AssaultSquad::lockHot() {
      * WaitRevive
      * 最弱单位
      */
+
+    if (target_id == 7 + enemyCamp()) {
+        hot_id = 3 + enemyCamp();
+        hot = console->getUnit(hot_id);
+        return;
+    }
 
     // todo 由于队形调整浪费时间,需要一直沿用某一hot对象,直到其死亡或逃逸
 
@@ -1725,7 +1772,7 @@ void Hero::cdWalk() {       // toedit 主要策略点
 
     Pos ref_p = nearest->pos;               // position of reference
     // 撤离的距离为保持两者间距一个speed
-    Pos far_p = parallelChangePos(pos, ref_p, speed, true);
+    Pos far_p = parallelChangePos(pos, ref_p, speed / 2, true);
     console->move(far_p, punit);        // go
 }
 
@@ -1880,7 +1927,7 @@ void Hero::printAtkInfo() const {
 bool HammerGuard::timeToSkill() {
     int dist2 = dis2(hot->pos, pos);
     bool under_fire = dist2 < HAMMERATTACK_RANGE;
-    if (can_skill && under_fire) {
+    if (can_skill && under_fire && !hot->isBase()) {
         return true;
     } else {
         return false;
@@ -2050,6 +2097,10 @@ void Master::justMove() {   // assert: out of field or hot = nullptr
     } else if (can_skill) {
         Pos p = parallelChangePos(pos, target, BLINK_RANGE, false);
         console->useSkill("Blink", p, punit);
+#ifdef LOG
+        logger << "[skill] blink move to ";
+        logger << p << endl;
+#endif
     } else {
         console->move(target, punit);
 #ifdef LOG
@@ -2180,26 +2231,25 @@ void Scouter::justMove() {
 /*
 [TESTED]
 Update:
-. clean some redundant variables
-. MD evaluation situ
-. add blink when master moves
+. simple tactics now
+. recover level up
 
 Fixed bugs:
-. level up
-. MD do not leave mine so easily
-. push the right camp
-. make moveMembers() robust
-. call back to level up
+. callBack()
+. hammerguard attacks base
 
 Non-fixed problems:
 . !! FIRST WAVE
-. !! tactics not applied
-. ?if MD lost a mine, no one is going to get it back
-. when too few members, still split!
+. !! level up!
+. !! master blink
 
 . positions are too separate
 
-. ?hold camp
+TODO:
+. when taken control of center mine, take turns to come back and lvlup
+. level up strategy
+. other tactics
+
 
 In 3 branches: HEAD, develop, origin/dev
  */
