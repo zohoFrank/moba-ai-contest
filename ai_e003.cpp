@@ -52,9 +52,9 @@ static const Tactic TACTICS[] = {
         Pos(65, 63), Pos(89, 86)
 };
 
-static const int OBSERVE_POS_N = 2;
+static const int OBSERVE_POS_N = 1;
 static const Pos OBSERVE_POS[OBSERVE_POS_N] = {     // 带偏移量防止碰撞半径引起麻烦
-        Pos(25, 25), Pos(125, 125)
+        MINE_POS[0] + Pos(3, 3)
 };
 
 
@@ -72,7 +72,7 @@ static int BUY_RANK = 42314312;             // 请参考hero_name
 // callBack
 static const int CALLBACK_MIN_DIST2 = 600;  // 召回的必要最小距离
 static const int CALLBACK_LVLUP = 2000;      // 召回升级的最小经济水平
-static const int CALLBACK_RECV_HP = 1000;   // 召回补血的最小经济水平
+static const int CALLBACK_RECV_HP = 2000;   // 召回补血的最小经济水平
 
 // clearOldInfo()
 static const int CLEAN_LIMIT = 6;           // 最多保留回合记录
@@ -115,13 +115,14 @@ static vector<int> BackupTactics = {5, 6};      // 备选战术 player1
 static queue<int> GetBack;                      // 需要夺回的地点:MD刚失守的,或计划夺取的
 
 // 战术延时
-static const int StickRounds = 40;                    // 初始保留战术的时间
-static int TargetCounter[TAC_TARGETS_N] = {};   // 战术计时
+static const int StickRounds = 50;                    // 初始保留战术的时间
+static int TCounter = StickRounds;              // 设置战术倒计时
 
 // 战局判断
 static const int LEVEL1 = 12;                   // 判断第一界点,低于此不分队
-static const int LEVEL2 = 21;                   // 判断第二界点,高于此推基地
+static const int LEVEL2 = 23;                   // 判断第二界点,高于此推基地
 static int TargetSitu[TAC_TARGETS_N] = {};        // 占据判断
+static int TargetCounter[TAC_TARGETS_N] = {};   // 战术计时
 static vector<int> BackupStore;                 // 临时储存
 
 typedef vector<int> ID_LIST;
@@ -980,7 +981,7 @@ void Commander::scanMines() {
         Pos en_p = vi_enemies[i]->pos;
         int dist2 = dis2(camp_p, en_p);
         // warn 一有人就召回
-        if (dist2 < 4 * OBSERVER_VIEW) {
+        if (dist2 < 16 * BATTLE_RANGE) {
             has_danger = true;
             break;
         }
@@ -1122,6 +1123,11 @@ void Commander::pushEnemyCamp() {
 
 void Commander::handle(int phase) {
     // 开局
+    if (Round < 25) {
+        SquadTargets[0] = 9 + CAMP;
+        SquadTargets[1] = 9 + CAMP;
+        return;
+    }
     if (Round < StickRounds) {
         SquadTargets[0] = 0;
         SquadTargets[1] = 0;
@@ -1202,7 +1208,6 @@ void Commander::handle(int phase) {
         BackupStore.push_back(target1);
         SquadTargets[0] = camp_id;
         SquadTargets[1] = camp_id;
-        return;
     }
 
     // push enemy camp
@@ -1339,8 +1344,7 @@ void Commander::callBack() {
     if (Economy > CALLBACK_RECV_HP) {
         for (auto i = cur_friends.begin(); i != cur_friends.end(); ++i) {
             if (!(*i)->findBuff("WinOrDie")
-                && (*i)->hp < HP_FLEE_ALERT * (*i)->max_hp
-                && (*i)->typeId == 4) {
+                && (*i)->hp < HP_FLEE_ALERT * (*i)->max_hp) {
                 console->callBackHero((*i), base + Pos(-3, 0));
             }
         }
@@ -1539,17 +1543,16 @@ void AssaultSquad::crossBesiege() {
     Pos target = hot->pos;
 
     for (int i = 0; i < members.size(); ++i) {
-        Hero *hero = members[i];
         Pos rightPos = target + onPosition[i];
-        PUnit *unit = hero->punit;
-        hero->besiege = true;                 // 先设定besiege标志
+        PUnit *unit = members[i]->punit;
+        members[i]->besiege = true;                 // 先设定besiege标志
 
         if (unit->pos != rightPos) {
-            hero->target = rightPos;                      // warn 下一轮target又会更新,应该不用担心
+            members[i]->target = rightPos;                      // warn 下一轮target又会更新,应该不用担心
         }
 
         // 通过接口执行,避免不必要的误判 warn 不通过console破坏封装
-        hero->HeroAct();
+        members[i]->HeroAct();
     }
 }
 
@@ -2044,22 +2047,21 @@ bool Berserker::timeToSkill() {
         return false;
 
 
-    // hot必须是落单对象
+    // 且hot必须不能产生攻击
     int rounds = max((dist2 - range), 0) / speed + 1;
+    if (canDamage(hot, rounds)) {
+        return false;
+    }
+
+    // hot必须是落单对象
     for (int i = 0; i < vi_enemies.size(); ++i) {
         PUnit *pu = vi_enemies[i];
         int dist2_pu = dis2(pu->pos, hot->pos);
-        if (hot->pos == pu->pos) continue;          // same unit
-        if (dist2_pu > rounds * rounds * pu->speed + pu->range)
-            continue;  // can't reach
-        if (canDamage(pu, rounds)) {                // no damage output
+        if (dist2_pu == 0 || dist2_pu > rounds * rounds * pu->speed)
+            continue;          // same unit || can't reach
+        if (canDamage(pu, rounds)) {                // no damage
             return false;
         }
-    }
-
-    // 且hot必须不能产生攻击
-    if (canDamage(hot, rounds)) {
-        return false;
     }
 
     // 以上都通过,则可以
@@ -2220,17 +2222,14 @@ bool Scouter::timeToSkill() {
 Pos Scouter::observeTarget() {
     for (int i = 0; i < OBSERVE_POS_N; ++i) {
         int dist2 = dis2(pos, OBSERVE_POS[i]);
-        if (dist2 < SET_OBSERVER_RANGE * 4) {
+        if (dist2 < SET_OBSERVER_RANGE) {
             UnitFilter filter;
             filter.setAreaFilter(new Circle(OBSERVE_POS[i], OBSERVER_VIEW), "w");
             filter.setTypeFilter("Observer", "w");
             vector<PUnit *> observers = console->friendlyUnits(filter);
-            if (observers.empty()) {
-                return pos + ((CAMP == 0) ? Pos(-2, 2) : Pos(2, -2));
+            if (!observers.empty()) {
+                return OBSERVE_POS[i];
             }
-#ifdef TEMP
-            logger << ">> observers not empty? name=" << observers[0]->name << endl;
-#endif
         }
     }
     return Pos(-1, -1);
@@ -2292,11 +2291,15 @@ void Scouter::justMove() {
 /*
 [TESTED]
 Update:
+. New Tactics
+. sacrifice strategy
+! parallelChangePos()
 
 Fixed bugs:
 
 Non-fixed problems:
-. ?? keep pushing
+. ?? master blink
+. !! keep pushing
 
 . sqaud formation
 . FIRST WAVE
