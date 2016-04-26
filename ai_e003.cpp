@@ -35,7 +35,7 @@ class MainCarrier; class MineDigger; class BattleScouter;
  ************************************************************/
 static const int BIG_INT = 1 << 12;
 
-static const int TAC_TARGETS_N = 9;         // 7个矿+2个基地
+static const int TAC_TARGETS_N = 10;         // 7个矿+2个基地
 static const int MINE_NUM_SHIFT = 5;        // 编号偏移,id = tac_id + shift
 
 static const int HERO_COST[] = {
@@ -48,12 +48,13 @@ static const char *ACTIVE_SKILL[] = {"HammerAttack", "Blink", "Sacrifice", "SetO
 static const Tactic TACTICS[] = {
         MINE_POS[0], MINE_POS[1], MINE_POS[2], MINE_POS[3],
         MINE_POS[4], MINE_POS[5], MINE_POS[6],
-        MILITARY_BASE_POS[0], MILITARY_BASE_POS[1]
+        MILITARY_BASE_POS[0], MILITARY_BASE_POS[1],
+        Pos(65, 63), Pos(89, 86)
 };
 
-static const int OBSERVE_POS_N = 1;
+static const int OBSERVE_POS_N = 2;
 static const Pos OBSERVE_POS[OBSERVE_POS_N] = {     // 带偏移量防止碰撞半径引起麻烦
-        MINE_POS[0] + Pos(3, 3)
+        Pos(25, 25), Pos(125, 125)
 };
 
 
@@ -71,7 +72,7 @@ static int BUY_RANK = 42314312;             // 请参考hero_name
 // callBack
 static const int CALLBACK_MIN_DIST2 = 600;  // 召回的必要最小距离
 static const int CALLBACK_LVLUP = 2000;      // 召回升级的最小经济水平
-static const int CALLBACK_RECV_HP = 2000;   // 召回补血的最小经济水平
+static const int CALLBACK_RECV_HP = 1000;   // 召回补血的最小经济水平
 
 // clearOldInfo()
 static const int CLEAN_LIMIT = 6;           // 最多保留回合记录
@@ -114,14 +115,13 @@ static vector<int> BackupTactics = {5, 6};      // 备选战术 player1
 static queue<int> GetBack;                      // 需要夺回的地点:MD刚失守的,或计划夺取的
 
 // 战术延时
-static const int StickRounds = 50;                    // 初始保留战术的时间
-static int TCounter = StickRounds;              // 设置战术倒计时
+static const int StickRounds = 40;                    // 初始保留战术的时间
+static int TargetCounter[TAC_TARGETS_N] = {};   // 战术计时
 
 // 战局判断
 static const int LEVEL1 = 12;                   // 判断第一界点,低于此不分队
-static const int LEVEL2 = 23;                   // 判断第二界点,高于此推基地
+static const int LEVEL2 = 21;                   // 判断第二界点,高于此推基地
 static int TargetSitu[TAC_TARGETS_N] = {};        // 占据判断
-static int TargetCounter[TAC_TARGETS_N] = {};   // 战术计时
 static vector<int> BackupStore;                 // 临时储存
 
 typedef vector<int> ID_LIST;
@@ -360,7 +360,7 @@ public:
     bool can_skill;
     bool can_attack;
     bool besiege;                               // 抵近攻击/包围攻击,需要小队设置
-    bool emergency;                             // 有紧急情况,不需要继续别的指令
+    bool emergent;                             // 有紧急情况,不需要继续别的指令
 
     /*********************************************************/
     virtual PUnit *nearestEnemy() const;
@@ -980,7 +980,7 @@ void Commander::scanMines() {
         Pos en_p = vi_enemies[i]->pos;
         int dist2 = dis2(camp_p, en_p);
         // warn 一有人就召回
-        if (dist2 < 16 * BATTLE_RANGE) {
+        if (dist2 < 4 * OBSERVER_VIEW) {
             has_danger = true;
             break;
         }
@@ -1202,6 +1202,7 @@ void Commander::handle(int phase) {
         BackupStore.push_back(target1);
         SquadTargets[0] = camp_id;
         SquadTargets[1] = camp_id;
+        return;
     }
 
     // push enemy camp
@@ -1338,7 +1339,8 @@ void Commander::callBack() {
     if (Economy > CALLBACK_RECV_HP) {
         for (auto i = cur_friends.begin(); i != cur_friends.end(); ++i) {
             if (!(*i)->findBuff("WinOrDie")
-                && (*i)->hp < HP_FLEE_ALERT * (*i)->max_hp) {
+                && (*i)->hp < HP_FLEE_ALERT * (*i)->max_hp
+                && (*i)->typeId == 4) {
                 console->callBackHero((*i), base + Pos(-3, 0));
             }
         }
@@ -1537,16 +1539,17 @@ void AssaultSquad::crossBesiege() {
     Pos target = hot->pos;
 
     for (int i = 0; i < members.size(); ++i) {
+        Hero *hero = members[i];
         Pos rightPos = target + onPosition[i];
-        PUnit *unit = members[i]->punit;
-        members[i]->besiege = true;                 // 先设定besiege标志
+        PUnit *unit = hero->punit;
+        hero->besiege = true;                 // 先设定besiege标志
 
         if (unit->pos != rightPos) {
-            members[i]->target = rightPos;                      // warn 下一轮target又会更新,应该不用担心
+            hero->target = rightPos;                      // warn 下一轮target又会更新,应该不用担心
         }
 
         // 通过接口执行,避免不必要的误判 warn 不通过console破坏封装
-        members[i]->HeroAct();
+        hero->HeroAct();
     }
 }
 
@@ -1849,22 +1852,12 @@ void Hero::fastFlee() {
     }
 
     Pos ref = nearestEnemy()->pos;
-    // 撤离距离为尽量远离任何最近的单位
-    if (type == 4 && can_skill) {     // master的闪烁
-        Pos far_p = parallelChangePos(pos, ref, BLINK_RANGE, true);
-        console->useSkill("Blink", far_p, punit);       // go
+    Pos far_p = parallelChangePos(pos, ref, speed, true);
+    console->move(far_p, punit);                    // go
 #ifdef LOG
-        logger << "[skill] Blink from ";
-        logger << pos << " to " << far_p << endl;
+    logger << "[move] flee to ";
+    logger << far_p << endl;
 #endif
-    } else {
-        Pos far_p = parallelChangePos(pos, ref, speed, true);
-        console->move(far_p, punit);                    // go
-#ifdef LOG
-        logger << "[move] flee to ";
-        logger << far_p << endl;
-#endif
-    }
 }
 
 
@@ -1885,7 +1878,7 @@ Hero::Hero(int _id, int _hot, int _tactic) :
     can_skill = punit->canUseSkill(ACTIVE_SKILL[punit->typeId - 3]);
     can_attack = punit->canUseSkill("Attack");
     besiege = true;
-    emergency = false;
+    emergent = false;
 }
 
 
@@ -1909,7 +1902,7 @@ Hero::Hero(PUnit *me, PUnit *hot, int t_id) :
 
     can_skill = punit->canUseSkill(ACTIVE_SKILL[punit->typeId - 3]);
     can_attack = punit->canUseSkill("Attack");
-    emergency = false;
+    emergent = false;
 }
 
 
@@ -1923,20 +1916,20 @@ Hero::~Hero() {
 
 void Hero::Emergency() {
     if (timeToFlee()) {
-        emergency = true;
+        emergent = true;
         fastFlee();
         return;
     }
 
     if (outOfField() || hot == nullptr) {
-        emergency = true;
+        emergent = true;
         justMove();
         return;
     }
 
     if (!besiege) {
         if (!can_skill && !can_attack) {
-            emergency = true;
+            emergent = true;
             cdWalk();
             return;
         }
@@ -1954,7 +1947,7 @@ void Hero::Attack() {
 
 void Hero::HeroAct() {
     Emergency();
-    if (!emergency) {
+    if (!emergent) {
         Attack();
     }
 }
@@ -2052,11 +2045,14 @@ bool Berserker::timeToSkill() {
 
 
     // hot必须是落单对象
-    int rounds = max((dist2 - range), 0) / speed;
+    int rounds = max((dist2 - range), 0) / speed + 1;
     for (int i = 0; i < vi_enemies.size(); ++i) {
         PUnit *pu = vi_enemies[i];
+        int dist2_pu = dis2(pu->pos, hot->pos);
         if (hot->pos == pu->pos) continue;          // same unit
-        if (canDamage(pu, rounds)) {                // no damage
+        if (dist2_pu > rounds * rounds * pu->speed + pu->range)
+            continue;  // can't reach
+        if (canDamage(pu, rounds)) {                // no damage output
             return false;
         }
     }
@@ -2175,20 +2171,20 @@ void Master::justMove() {   // assert: out of field or hot = nullptr
 
 void Master::Emergency() {
     if (Hero::timeToFlee()) {
-        emergency = true;
+        emergent = true;
         fastFlee();
         return;
     }
 
     if (outOfField() || hot == nullptr) {
-        emergency = true;
+        emergent = true;
         justMove();
         return;
     }
 
     if (!besiege) {
         if (!can_skill && !can_attack) {
-            emergency = true;
+            emergent = true;
             cdWalk();
             return;
         }
@@ -2224,14 +2220,17 @@ bool Scouter::timeToSkill() {
 Pos Scouter::observeTarget() {
     for (int i = 0; i < OBSERVE_POS_N; ++i) {
         int dist2 = dis2(pos, OBSERVE_POS[i]);
-        if (dist2 < SET_OBSERVER_RANGE) {
+        if (dist2 < SET_OBSERVER_RANGE * 4) {
             UnitFilter filter;
             filter.setAreaFilter(new Circle(OBSERVE_POS[i], OBSERVER_VIEW), "w");
             filter.setTypeFilter("Observer", "w");
             vector<PUnit *> observers = console->friendlyUnits(filter);
-            if (!observers.empty()) {
-                return OBSERVE_POS[i];
+            if (observers.empty()) {
+                return pos + ((CAMP == 0) ? Pos(-2, 2) : Pos(2, -2));
             }
+#ifdef TEMP
+            logger << ">> observers not empty? name=" << observers[0]->name << endl;
+#endif
         }
     }
     return Pos(-1, -1);
@@ -2249,20 +2248,20 @@ Scouter::Scouter(PUnit *me, PUnit *hot, int t_id) :
 
 void Scouter::Emergency() {
     if (Hero::timeToFlee()) {
-        emergency = true;
+        emergent = true;
         Hero::fastFlee();
         return;
     }
 
     if (outOfField() || hot == nullptr) {
-        emergency = true;
+        emergent = true;
         justMove();
         return;
     }
 
     if (!besiege) {
         if (!can_skill && !can_attack) {
-            emergency = true;
+            emergent = true;
             cdWalk();
             return;
         }
@@ -2293,15 +2292,11 @@ void Scouter::justMove() {
 /*
 [TESTED]
 Update:
-. New Tactics
-. sacrifice strategy
-! parallelChangePos()
 
 Fixed bugs:
 
 Non-fixed problems:
-. ?? master blink
-. !! keep pushing
+. ?? keep pushing
 
 . sqaud formation
 . FIRST WAVE
