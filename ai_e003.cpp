@@ -81,7 +81,8 @@ static const int CLEAN_NUMS = 2;            // 超过最多保留记录后,一�
 static const double HP_FLEE_ALERT = 0.2;         // 血量预警百分比
 static const double HP_BACK_ALERT = 0.45;         // 回基地补血百分比
 
-static const int BATTLE_RANGE = 400;        // 战区范围
+static const int BATTLE_RANGE = 100;                // 战斗范围
+static const int BATTLE_FIELD = 4 * BATTLE_RANGE;   // 战区范围
 
 // Squad
 static const int MEMBER_LIMIT = 4;          // 小队最多人数
@@ -117,8 +118,8 @@ static const int StickRounds = 50;                    // 初始保留战术的�
 static int TCounter = StickRounds;              // 设置战术倒计时
 
 // 战局判断
-static const int LEVEL1 = 10;                   // 判断第一界点,低于此不分队
-static const int LEVEL2 = 25;                   // 判断第二界点,高于此推基地
+static const int LEVEL1 = 12;                   // 判断第一界点,低于此不分队
+static const int LEVEL2 = 23;                   // 判断第二界点,高于此推基地
 static int TargetSitu[TAC_TARGETS_N] = {};        // 占据判断
 static int TargetCounter[TAC_TARGETS_N] = {};   // 战术计时
 static vector<int> BackupStore;                 // 临时储存
@@ -655,7 +656,7 @@ Pos parallelChangePos(
      * double len - 要移动的距离
      * bool away - true为原理参考点,false为接近参考点
      */
-    double len = sqrt(len2 * 1.0);
+    double len = sqrt(len2 * 1.0) - 2;  // 防止计算误差
     double dist = dis(origin, reference);
     // 正方向单位向量
     double unit_x = 1.0 * (reference.x - origin.x) / dist;
@@ -979,7 +980,7 @@ void Commander::scanMines() {
         Pos en_p = vi_enemies[i]->pos;
         int dist2 = dis2(camp_p, en_p);
         // warn 一有人就召回
-        if (dist2 < 2 * BATTLE_RANGE) {
+        if (dist2 < 16 * BATTLE_RANGE) {
             has_danger = true;
             break;
         }
@@ -997,7 +998,7 @@ void Commander::scanMines() {
     for (int j = 0; j < _szf; ++j) {
         Pos p = cur_friends[j]->pos;
         int dist2 = dis2(en_camp_p, p);
-        if (dist2 < BATTLE_RANGE) {
+        if (dist2 < 4 * BATTLE_RANGE) {
             no_one = false;
             break;
         }
@@ -1016,14 +1017,14 @@ void Commander::scanMines() {
     for (int k = 0; k < _sz; ++k) {
         Pos en_p = vi_enemies[k]->pos;
         int dist2 = dis2(TACTICS[0], en_p);
-        if (dist2 < BATTLE_RANGE) {
+        if (dist2 < 4 * BATTLE_RANGE) {
             cnt_en++;
         }
     }
     for (int l = 0; l < _szf; ++l) {
         Pos p = cur_friends[l]->pos;
         int dist2 = dis2(TACTICS[0], p);
-        if (dist2 < BATTLE_RANGE) {
+        if (dist2 < 4 * BATTLE_RANGE) {
             cnt_f++;
         }
     }
@@ -2156,7 +2157,7 @@ void Master::justMove() {   // assert: out of field or hot = nullptr
     if (hp < HP_BACK_ALERT * punit->max_hp) {
         console->move(MILITARY_BASE_POS[CAMP], punit);
     } else if (can_skill && outOfField()) {
-        Pos p = parallelChangePos(pos, target, BLINK_RANGE - 10, false);
+        Pos p = parallelChangePos(pos, target, BLINK_RANGE, false);
         console->useSkill("Blink", p, punit);
 #ifdef LOG
         logger << "[skill] blink move to ";
@@ -2294,14 +2295,15 @@ void Scouter::justMove() {
 Update:
 . New Tactics
 . sacrifice strategy
+! parallelChangePos()
 
 Fixed bugs:
-
 
 Non-fixed problems:
 . ?? master blink
 . !! keep pushing
 
+. sqaud formation
 . FIRST WAVE
 . set observer
 
