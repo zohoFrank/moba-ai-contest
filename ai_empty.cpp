@@ -3,6 +3,7 @@
  * 空ai,可以便于测试走位等
  */
 #include "console.h"
+#include "Pos.h"
 #include <fstream>
 #include <map>
 
@@ -24,26 +25,28 @@ void player_ai(const PMap &map, const PPlayerInfo &info, PCommand &cmd) {
 
     console = new Console(map, info, cmd);
 
-    console->chooseHero(HERO_NAME[0]);
-
     UnitFilter filter;
-    filter.setAvoidFilter("MilitaryBase", "a");
-    filter.setAvoidFilter("Observer", "w");
+    filter.setAvoidFilter("MilitaryBase", "w");
+    filter.setAvoidFilter("Observer", "a");
     vector<PUnit *> friends = console->friendlyUnits(filter);
 
+    if (friends.size() == 0) {
+        console->chooseHero(HERO_NAME[0]);
+    }
+
+
+
+
+    /******************************/
     if (!friends.empty()) {
         for (int i = 0; i < friends.size(); ++i) {
+            Pos test = Pos(105, 61);
             PUnit *pu = friends[i];
             console->selectUnit(pu);
-
-            if (now_s < N) {
-                console->move(MINE_POS[scouters[now_s]]);
-                UnitFilter mine_f;
-                mine_f.setAreaFilter(new Circle(MINE_POS[scouters[now_s]], 20), "a");
-                mine_f.setTypeFilter("Mine", "a");
-                vector<PUnit *> mines = console->enemyUnits(mine_f);
-                if (!mines.empty())
-                    now_s++;
+            if (pu->pos == test) {
+                console->useSkill("Blink", Pos(5, 5));
+            } else {
+                console->move(test);
             }
         }
     }
