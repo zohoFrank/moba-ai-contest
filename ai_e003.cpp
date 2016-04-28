@@ -979,7 +979,7 @@ void Commander::scanMines() {
     int _sz = (int) vi_enemies.size();
     int _szf = (int) cur_friends.size();
     /* special target */
-    // camp
+    // camp - 1:交战, 2:无交战
     int camp_id = 7 + CAMP;
     Pos camp_p = TACTICS[camp_id];
     bool has_danger = false;
@@ -998,7 +998,7 @@ void Commander::scanMines() {
         TargetSitu[camp_id] = 1;
     }
 
-    // enemy camp
+    // enemy camp - 0:无观察, 1:交战
     int en_camp_id = 7 + enemyCamp();
     Pos en_camp_p = TACTICS[en_camp_id];
     bool no_one = true;
@@ -1037,7 +1037,7 @@ void Commander::scanMines() {
             }
         }
         // set counter and situation
-        // center
+        // center - -1:失守, 1:交战, 2:占据
         if (m == 0) {
             if (cnt_f == 0 && TCounter < 0) {
                 TargetSitu[m] = -1;
@@ -1050,7 +1050,7 @@ void Commander::scanMines() {
                 TargetCounter[m] = 0;
             }
         } else {
-            // others
+            // others - -1:与非野单位交战, 1:打野采矿状态
             if (cnt_en != 0) {
                 TargetSitu[m] = -1;
                 TargetCounter[m] = 0;
@@ -1185,13 +1185,13 @@ void Commander::handle(int phase) {
         int situ = TargetSitu[0];
         if (situ == -1) {           // 失守
             if (phase == 1) {
-                changeTactic(1, 1);
+                changeTactic(backup1, backup1);
             } else if (phase == 2) {
-                changeTactic(1, 3);
+                changeTactic(backup1, backup2);
             }
         } else if (situ == 2) {     // 暂时占据
             if (TargetCounter[0] > SUP_MIN)  {      // 长时间占据
-                changeTactic(0, 1);
+                changeTactic(0, backup1);
             }
         }
     }
@@ -1222,7 +1222,8 @@ void Commander::handle(int phase) {
     // 0 + back1
     if (target0 == 0 && target1 == backup1) {
         int situ0 = TargetSitu[0];
-        if (situ0 == 1 || situ0 == -1) {
+        int situ1 = TargetSitu[backup1];
+        if (situ0 == 1) {
             changeTactic(0, 0);
         }
     }
@@ -1260,6 +1261,7 @@ void Commander::handle(int phase) {
             BackupStore.clear();
             changeTactic(t0, t1);
         }
+        // todo 可以考虑风筝召回单位的对手
     }
 
     /* Shared */
