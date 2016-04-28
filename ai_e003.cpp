@@ -52,9 +52,9 @@ static const Tactic TACTICS[] = {
         Pos(65, 63), Pos(89, 86)
 };
 
-static const int OBSERVE_POS_N = 1;
+static const int OBSERVE_POS_N = 3;
 static const Pos OBSERVE_POS[OBSERVE_POS_N] = {     // 带偏移量防止碰撞半径引起麻烦
-        MINE_POS[0] + Pos(3, 3)
+        MINE_POS[0], Pos(20, 28), Pos(123, 128)
 };
 
 
@@ -1226,6 +1226,9 @@ void Commander::handle(int phase) {
         if (situ0 == 1) {
             changeTactic(0, 0);
         }
+        if(situ1 == -1) {
+            changeTactic(0, backup2);
+        }
     }
 
     // back3
@@ -1534,6 +1537,7 @@ void AssaultSquad::lockHot() {
         vector<PUnit *> observers = console->enemyUnits(filter);
         if (!observers.empty()) {
             hot = observers[0];
+            return;
         } else {
             hot = nullptr;
             hot_id = -1;
@@ -2320,13 +2324,16 @@ bool Scouter::timeToSkill() {
 Pos Scouter::observeTarget() {
     for (int i = 0; i < OBSERVE_POS_N; ++i) {
         int dist2 = dis2(pos, OBSERVE_POS[i]);
-        if (dist2 < SET_OBSERVER_RANGE) {
+        if (dist2 < BATTLE_FIELD) {
             UnitFilter filter;
             filter.setAreaFilter(new Circle(OBSERVE_POS[i], OBSERVER_VIEW), "w");
             filter.setTypeFilter("Observer", "w");
             vector<PUnit *> observers = console->friendlyUnits(filter);
-            if (!observers.empty()) {
-                return OBSERVE_POS[i];
+            if (observers.empty()) {
+                Pos shift;
+                shift.x = (CAMP == 0) ? -2 : 2;
+                shift.y = (CAMP == 0) ? 2 : -2;
+                return pos + shift;
             }
         }
     }
