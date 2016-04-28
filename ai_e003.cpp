@@ -35,7 +35,7 @@ class MainCarrier; class MineDigger; class BattleScouter;
  ************************************************************/
 static const int BIG_INT = 1 << 12;
 
-static const int TAC_TARGETS_N = 10;         // 7个矿+2个基地
+static const int TAC_TARGETS_N = 9;         // 7个矿+2个基地
 static const int MINE_NUM_SHIFT = 5;        // 编号偏移,id = tac_id + shift
 
 static const int HERO_COST[] = {
@@ -45,17 +45,13 @@ static const char *HERO_NAME[] = {"Hammerguard", "Master", "Berserker", "Scouter
 
 static const char *ACTIVE_SKILL[] = {"HammerAttack", "Blink", "Sacrifice", "SetObserver"};
 
-static const Tactic TACTICS[] = {
+static const Tactic TACTICS[TAC_TARGETS_N] = {
         MINE_POS[0], MINE_POS[1], MINE_POS[2], MINE_POS[3],
         MINE_POS[4], MINE_POS[5], MINE_POS[6],
-        MILITARY_BASE_POS[0], MILITARY_BASE_POS[1],
-        Pos(65, 63), Pos(89, 86)
+        MILITARY_BASE_POS[0], MILITARY_BASE_POS[1]
 };
 
-static const int OBSERVE_POS_N = 3;
-static const Pos OBSERVE_POS[OBSERVE_POS_N] = {     // 带偏移量防止碰撞半径引起麻烦
-        MINE_POS[0], Pos(20, 28), Pos(123, 128)
-};
+static const int OBSERVE_POS_N = 2;
 
 
 /************************************************************
@@ -64,7 +60,7 @@ static const Pos OBSERVE_POS[OBSERVE_POS_N] = {     // 带偏移量防止碰撞�
 // unchanged values (during the entire game)
 static int CAMP = -1;                       // which camp
 
-// Commander
+// base actions
 // levelUp
 static const double LEVEL_UP_COST = 0.5;    // 升级金钱比例
 // buyNewHero
@@ -84,6 +80,7 @@ static const double HP_FLEE_ALERT = 0.2;         // 血量预警百分比
 static const double HP_BACK_ALERT = 0.45;         // 回基地补血百分比
 
 static const int BATTLE_RANGE = 100;                // 战斗范围
+static const int ASSEMBLE_RANGE = 9;               // 集结范围
 static const int BATTLE_FIELD = 4 * BATTLE_RANGE;   // 战区范围
 
 // Squad
@@ -109,6 +106,12 @@ vector<PUnit *> vi_monsters;                    // 可见野怪
  ************************************************************/
 /* 战术核心 */
 // 7个矿顺序依次是 0-中矿,1-8点,2-10点,3-4点,4-2点,5-西北,6-东南
+/*
+ *   2 ——————————— 4
+ *   |             |
+ *   |      0      |
+ *   1 ——————————— 3
+ */
 static const int SUP_MIN = 50;                  // 优势判分标准
 static const int BAK_MAX = -50;                 // 劣势判分标准
 static vector<int> SuperiorTactics = {0, 1, 2, 3, 4}; // 优势战术
@@ -120,27 +123,36 @@ static const int StickRounds = 50;                    // 初始保留战术的�
 static int TCounter = StickRounds;              // 设置战术倒计时
 
 // 战局判断
-static const int LEVEL1 = 10;                   // 判断第一界点,低于此不分队
+static const int LEVEL1 = 8;                   // 判断第一界点,低于此不分队
 static const int LEVEL2 = 21;                   // 判断第二界点,高于此推基地
 static int TargetSitu[TAC_TARGETS_N] = {};        // 占据判断
 static int TargetCounter[TAC_TARGETS_N] = {};   // 战术计时
+static int FirstWave[TAC_TARGETS_N] = {};       // 第一波: 1-是, 0-否
 static vector<int> BackupStore;                 // 临时储存
 
 typedef vector<int> ID_LIST;
 // Squad settings
-static const int SQUAD_N = 8;                   // 小队数量
+static const int SQUAD_N = 2;                   // 小队数量
 static int SquadTargets[SQUAD_N] = {};          // 小队战术id
 static vector<ID_LIST> SquadMembers(8, vector<int>(0));            // 各小队成员安排
 
 // Squad list
 static const int SINGLE_MC_LIMIT = 8;           // MC人数max限制
-static vector<AssaultSquad *> AllSquads;        // 所有小队,默认初始化后需要调整参数
 static const int MC_I = 1;
 static const int MD_I = 5;
 static const int BS_I = 7;
 static const int SCOUT_OK = 5;                  // 侦查完成的最大距离
 
-
+// need initilization
+static vector<AssaultSquad *> AllSquads;        // 所有小队,默认初始化后需要调整参数
+static Pos ASSEMBLY_POINTS[TAC_TARGETS_N] = {   // 第一波的集散点,需要初始化修改
+        TACTICS[0], Pos(44, 75), Pos(44, 75), Pos(105, 75),
+        Pos(105, 75), Pos(32, 128), Pos(117, 22),
+        TACTICS[7], TACTICS[8]
+};
+static Pos OBSERVE_POS[OBSERVE_POS_N] = {       // 设Observer的点,需要初始化修改
+        MINE_POS[0], Pos(20, 28)
+};
 
 
 /*################# Assistant functions ####################*/
@@ -217,10 +229,9 @@ protected:
     void scanMines();                                 // 扫描矿
     // 封装接口,根据squad::situation返回
     void markTarget(int target);                    // 封装接口,标记待(全体)夺取,放入GetBack
-    void callBackupSquad(int needed_n);             // 组织一个小队,回防
     // 获得小队总等级
     int getPhase();                                 // 根据目前等级反馈战斗阶段
-    void changeTactic(int _0, int _1);              // 改变战术
+    void changeTactic(int a, int b);              // 改变战术
     void moveMembers(int from, int to, int n);      // 在小队间移动成员
     void gatherAll();                               // 聚集所有小队到0号
     bool timeToPush();                              // 推基地时机判断
@@ -270,6 +281,7 @@ public:
     bool besiege;                       // 包围攻击,同时设置小队成员的besiege标志
 
     vector<Hero *> members;             // 成员指针,便于调用
+    PUnit *leader;                      // 领队
     vector<PUnit *> sector_en;          // 区域敌人
     vector<PUnit *> sector_f;           // 区域朋友
 
@@ -279,6 +291,7 @@ public:
     /*************************HELPER****************************/
     virtual void clean();               // 静态对象,每回合开始需要重置一些东西
     virtual void resetTacMonitor(int _n = StickRounds);   // 重设计数器/判断器
+    virtual bool firstWave();           // 判断第一波的接口
 
     // construct
     virtual void setOthers() = 0;       // 用来给子类设置自身独有的成员变量
@@ -290,7 +303,6 @@ public:
     virtual void evaluateSituation() = 0;   // 评估situation,+ postive, - negative
 
     /*************************Actions****************************/
-//    virtual void adjustFormation();     // 调整松散的队形
     virtual void crossBesiege();        // 十字卡位包围准备
     virtual void slipAttack();          // 游动攻击准备
 
@@ -731,6 +743,15 @@ void initilize() {
 //            AllSquads.push_back(temp);
 //        }
     }
+
+    // 初始化OBSERVE_POS
+    OBSERVE_POS[1] = (CAMP == 0) ? Pos(20, 28) : Pos(123, 128);
+
+    // 初始化ASSEMBLY_POINTS
+    ASSEMBLY_POINTS[0] = (CAMP == 0) ? Pos(65, 63) : Pos(89, 86);
+
+    // 初始化FirstWave
+    FirstWave[0] = 1;
 }
 
 // data structure related
@@ -1025,21 +1046,21 @@ void Commander::scanMines() {
         for (int k = 0; k < _sz; ++k) {
             Pos en_p = vi_enemies[k]->pos;
             int dist2 = dis2(TACTICS[m], en_p);
-            if (dist2 < BATTLE_RANGE) {
+            if (dist2 < BATTLE_FIELD) {
                 cnt_en++;
             }
         }
         for (int l = 0; l < _szf; ++l) {
             Pos p = cur_friends[l]->pos;
             int dist2 = dis2(TACTICS[m], p);
-            if (dist2 < BATTLE_RANGE) {
+            if (dist2 < BATTLE_FIELD) {
                 cnt_f++;
             }
         }
         // set counter and situation
         // center - -1:失守, 1:交战, 2:占据
         if (m == 0) {
-            if (cnt_f == 0 && TCounter < 0) {
+            if (cnt_f == 0 && TCounter < 0 && TargetSitu[m] != 2) {
                 TargetSitu[m] = -1;
                 TargetCounter[m] = 0;
             } else if (cnt_f != 0 && cnt_en == 0) {
@@ -1079,20 +1100,6 @@ void Commander::markTarget(int target) {
 }
 
 
-void Commander::callBackupSquad(int needed_n) {
-    int left = (int) (needed_n - SquadMembers[0].size());
-    if (left > 0) {
-        for (int i = 1; i < SQUAD_N; ++i) {
-            int call = min(left, (int) SquadMembers[i].size());
-            moveMembers(i, 0, call);
-            left -= call;
-            if (left <= 0) return;
-        }
-    }
-    SquadTargets[0] = 7 + CAMP;
-}
-
-
 int Commander::getPhase() {
     int levels = (int) cur_friends.size();
     for (int i = 0; i < cur_friends.size(); ++i) {
@@ -1109,10 +1116,23 @@ int Commander::getPhase() {
 }
 
 
-void Commander::changeTactic(int _0, int _1) {
-    SquadTargets[0] = _0;
+void Commander::changeTactic(int a, int b) {
+    int now0 = SquadTargets[0];
+    int now1 = SquadTargets[1];
+    // update first wave
+    for (int i = 0; i < TAC_TARGETS_N; ++i) {
+        if (i == a && now0 != a) {
+            FirstWave[i] = 1;
+        } else if (i == b && now1 != b) {
+            FirstWave[i] = 1;
+        } else {
+            FirstWave[i] = 0;
+        }
+    }
+
+    SquadTargets[0] = a;
     TargetCounter[0] = 0;
-    SquadTargets[1] = _1;
+    SquadTargets[1] = b;
     TargetCounter[1] = 0;
     TCounter = StickRounds;
 }
@@ -1156,32 +1176,27 @@ void Commander::pushEnemyCamp() {
 
 void Commander::handle(int phase) {
     // todo 需要整理
-    int backup1 = (CAMP == 0) ? 1 : 2;      // 最近的圈矿
-    int backup2 = (CAMP == 0) ? 3 : 4;      // 次近的圈矿
-    int backup3 = (CAMP == 0) ? 2 : 3;      // 第三近的圈矿
+    int backup1 = (CAMP == 0) ? 1 : 4;      // 最近的圈矿
+    int backup2 = (CAMP == 0) ? 2 : 3;      // 第三近的圈矿
+    int backup3 = (CAMP == 0) ? 3 : 2;      // 次近的圈矿
     int backup4 = (CAMP == 0) ? 4 : 1;      // 第四近的圈矿
-    int backup5 = 5;
-    int backup6 = 6;
-
-
+    int backups[] = {0, backup1, backup2, backup3, backup4, 5, 6};
+    int situations[] = {
+            TargetSitu[0], TargetSitu[backup1], TargetSitu[backup3], TargetSitu[backup4],
+            TargetSitu[5], TargetSitu[6]
+    };
+    int target0 = SquadTargets[0];
+    int target1 = SquadTargets[1];
 
     // 开局
-    if (Round < 25) {
-        SquadTargets[0] = 9 + CAMP;
-        SquadTargets[1] = 9 + CAMP;
-        return;
-    }
-    if (Round < 3 * StickRounds) {
+    if (Round < 2 * StickRounds) {
         SquadTargets[0] = 0;
         SquadTargets[1] = 0;
         return;
     }
 
-    int target0 = SquadTargets[0];
-    int target1 = SquadTargets[1];
-
     // 0
-    if (target0 == 0 && target0 == 0) {
+    if (target0 == 0 && target1 == 0) {
         int situ = TargetSitu[0];
         if (situ == -1) {           // 失守
             if (phase == 1) {
@@ -1192,12 +1207,15 @@ void Commander::handle(int phase) {
         } else if (situ == 2) {     // 暂时占据
             if (TargetCounter[0] > SUP_MIN)  {      // 长时间占据
                 changeTactic(0, backup1);
+#ifdef TEMP
+                logger << ">> [handle] superior, change to 0,b1" << endl;
+#endif
             }
         }
     }
 
     // back1
-    if (target0 == backup1 && target0 == backup1) {
+    if (target0 == backup1 && target1 == backup1) {
         if (phase == 2) {
             changeTactic(backup1, backup2);
         }
@@ -1206,16 +1224,36 @@ void Commander::handle(int phase) {
         }
     }
 
+    // back2
+    if (target0 == backup2 && target1 == backup2) {
+        if (phase == 2) {
+            changeTactic(backup1, backup2);
+        }
+        if (TargetSitu[backup2] == -1) {
+            changeTactic(backup1, backup1);
+        }
+    }
+
+    // back5
+    if (target0 == 5 && target1 == 5) {
+        int situ = TargetSitu[5];
+        if (situ == -1) {
+            changeTactic(6, 6);
+        } else if (phase == 2) {
+            changeTactic(5, 6);
+        }
+    }
+
     // back1 + back2
     if (target0 == backup1 && target1 == backup2) {
         int situ1 = TargetSitu[backup1];
         int situ2 = TargetSitu[backup2];
-        if (situ1 == -1) {
+        if (situ1 == -1 && situ2 != -1) {
             changeTactic(backup3, backup2);
-        } else if (situ2 == -1) {
+        } else if (situ1 != -1 && situ2 == -1) {
             changeTactic(backup1, backup3);
         } else if (situ1 == -1 && situ2 == -1) {
-            changeTactic(backup5, backup6);
+            changeTactic(0, 0);
         }
     }
 
@@ -1225,44 +1263,39 @@ void Commander::handle(int phase) {
         int situ1 = TargetSitu[backup1];
         if (situ0 == 1) {
             changeTactic(0, 0);
+#ifdef TEMP
+            logger << ">> [handle] danger on 0, change to 0,0" << endl;
+#endif
         }
         if(situ1 == -1) {
             changeTactic(0, backup2);
         }
     }
 
-    // back3
-    if (target0 == backup5 && target1 == backup5) {
-        int situ = TargetSitu[backup5];
-        if (situ == -1) {
-            changeTactic(backup6, backup6);
-        } else if (phase == 2) {
-            changeTactic(backup5, backup6);
-        }
-    }
 
+
+    /********************************************************************/
     // camp
     int camp_id = 7 + CAMP;
+    PUnit *base = const_cast<PUnit *>(console->getMilitaryBase());
     int situ_camp = TargetSitu[camp_id];
-    if (target0 == camp_id && target0 == camp_id) {
-        if (situ_camp == 0 || situ_camp == 2) {
+    if (target0 == camp_id && target1 == camp_id) {
+        if ((situ_camp == 0 || situ_camp == 2) && base->hp > base->max_hp / 2) {
             int t0 = BackupStore[0];
             int t1 = BackupStore[1];
             BackupStore.clear();
             changeTactic(t0, t1);
         }
+        return;
     }
 
     // enemy camp
     int en_camp_id = 7 + enemyCamp();
     int situ_en_camp = TargetSitu[en_camp_id];
     int now_cnt = TargetCounter[en_camp_id];
-    if (target0 == en_camp_id && target0 == en_camp_id) {
+    if (target0 == en_camp_id && target1 == en_camp_id) {
         if (situ_en_camp == 0 && now_cnt < StickRounds / 2) {
-            int t0 = BackupStore[0];
-            int t1 = BackupStore[1];
-            BackupStore.clear();
-            changeTactic(t0, t1);
+            changeTactic(0, 0);
         }
         // todo 可以考虑风筝召回单位的对手
     }
@@ -1279,8 +1312,6 @@ void Commander::handle(int phase) {
 
     // push enemy camp
     if (phase == 3 && now_cnt > StickRounds) {
-        BackupStore.push_back(target0);
-        BackupStore.push_back(target1);
         changeTactic(en_camp_id, en_camp_id);
     }
 
@@ -1478,6 +1509,11 @@ void AssaultSquad::resetTacMonitor(int _n) {
 }
 
 
+bool AssaultSquad::firstWave() {
+    return FirstWave[target_id] == 1;
+}
+
+
 void AssaultSquad::getAllCmdInfo() {
     member_id = SquadMembers[id];
     target_id = SquadTargets[id];
@@ -1529,11 +1565,11 @@ void AssaultSquad::lockHot() {
         return;
     }
 
-    // todo 由于队形调整浪费时间,需要一直沿用某一hot对象,直到其死亡或逃逸
-
     if (sector_en.size() == 0) {
         UnitFilter filter;
+        filter.setAreaFilter(new Circle(TACTICS[target_id], BATTLE_RANGE), "w");
         filter.setTypeFilter("Observer", "w");
+        filter.setAvoidFilter("Mine", "w");
         vector<PUnit *> observers = console->enemyUnits(filter);
         if (!observers.empty()) {
             hot = observers[0];
@@ -1606,12 +1642,14 @@ void AssaultSquad::setHeroes() {
         switch (unit->typeId) {
             case 3:
                 hero = new HammerGuard(unit, hot, target_id);
+                leader = unit;
                 break;
             case 4:
                 hero = new Master(unit, hot, target_id);
                 break;
             case 5:
                 hero = new Berserker(unit, hot, target_id);
+                leader = unit;
                 break;
             case 6:
                 hero = new Scouter(unit, hot, target_id);
@@ -1627,9 +1665,17 @@ void AssaultSquad::setHeroes() {
 }
 
 
-/*************************Actions****************************/
-
 void AssaultSquad::crossBesiege() {
+    // set target for non-leader
+    for (int j = 0; j < members.size(); ++j) {
+        Hero *hero = members[j];
+        if (hero->id == leader->id) {
+            continue;
+        } else {
+            hero->target = leader->pos;
+        }
+    }
+
     if (hot == nullptr || besiege == false) {
         for (int i = 0; i < members.size(); ++i) {
             members[i]->HeroAct();
@@ -1917,6 +1963,31 @@ bool Hero::timeToFlee() {
         return true;
     }
 
+    // 区域没有友军
+    int dist2target = dis2(pos, TACTICS[target_id]);
+    if (dist2target < BATTLE_FIELD) {
+        int near_friends = 0;
+        for (int i = 0; i < cur_friends.size(); ++i) {
+            PUnit *unit = cur_friends[i];
+            if (unit->id == id) continue;
+            int dist2 = dis2(pos, unit->pos);
+            if (dist2 < BATTLE_RANGE) {
+                near_friends++;
+            }
+        }
+        int near_enemies = 0;
+        for (int j = 0; j < vi_enemies.size(); ++j) {
+            PUnit *unit = vi_enemies[j];
+            int dist2 = dis2(pos, unit->pos);
+            if (dist2 < BATTLE_RANGE) {
+                near_enemies++;
+            }
+        }
+        if (near_friends <= 0 && near_enemies >= 2) {
+            return true;
+        }
+    }
+
     return false;
 }
 
@@ -2094,8 +2165,7 @@ void Hero::printAtkInfo() const {
 bool HammerGuard::timeToSkill() {
     int dist2 = dis2(hot->pos, pos);
     bool under_fire = dist2 < HAMMERATTACK_RANGE;
-    bool worthy = (hot->hp > HAMMERATTACK_DAMAGE[punit->level] / 2);
-    if (can_skill && under_fire && !hot->isBase() && worthy) {
+    if (can_skill && under_fire && !hot->isBase()) {
         return true;
     } else {
         return false;
@@ -2151,10 +2221,12 @@ bool Berserker::timeToSkill() {
 
     // hot必须在攻击范围内
     int dist2 = dis2(hot->pos, pos);
-    if (dist2 > range)
+    if (dist2 > range) {
+        target = hot->pos;
         return false;
+    }
 
-    // hot必须是落单对象
+    // 不能被其他单位攻击
     for (int i = 0; i < vi_enemies.size(); ++i) {
         PUnit *pu = vi_enemies[i];
         int dist2_pu = dis2(pu->pos, pos);
@@ -2322,18 +2394,24 @@ bool Scouter::timeToSkill() {
 
 
 Pos Scouter::observeTarget() {
+    if (!can_skill) return Pos(-1, -1);
+
     for (int i = 0; i < OBSERVE_POS_N; ++i) {
-        int dist2 = dis2(pos, OBSERVE_POS[i]);
+        Pos tar = OBSERVE_POS[i];
+        int dist2 = dis2(pos, tar);
         if (dist2 < BATTLE_FIELD) {
             UnitFilter filter;
-            filter.setAreaFilter(new Circle(OBSERVE_POS[i], OBSERVER_VIEW), "w");
+            filter.setAreaFilter(new Circle(tar, OBSERVER_VIEW), "w");
             filter.setTypeFilter("Observer", "w");
             vector<PUnit *> observers = console->friendlyUnits(filter);
             if (observers.empty()) {
-                Pos shift;
-                shift.x = (CAMP == 0) ? -2 : 2;
-                shift.y = (CAMP == 0) ? 2 : -2;
-                return pos + shift;
+                Pos shift = parallelChangePos(pos, tar, SET_OBSERVER_RANGE, false);
+#ifdef TEMP
+                logger << ">> [SCT] set observer at ";
+                logger << shift << " pos = ";
+                logger << pos << endl << endl;
+#endif
+                return shift;
             }
         }
     }
@@ -2396,17 +2474,14 @@ void Scouter::justMove() {
 /*
 [TESTED]
 Update:
-. New Tactics
-. sacrifice strategy
 
 Fixed bugs:
-. keep pushing
-. stick to one plan
+
 
 Non-fixed problems:
 . sqaud formation
 . FIRST WAVE
-. set observer
+. call back efficiently
 
 TODO:
 . when taken control of center mine, take turns to come back and lvlup
