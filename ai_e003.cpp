@@ -35,7 +35,7 @@ class MainCarrier; class MineDigger; class BattleScouter;
  ************************************************************/
 static const int BIG_INT = 1 << 12;
 
-static const int TAC_TARGETS_N = 9;         // 7个矿+2个基地
+static const int TAC_TARGETS_N = 10;         // 7个矿+2个基地
 static const int MINE_NUM_SHIFT = 5;        // 编号偏移,id = tac_id + shift
 
 static const int HERO_COST[] = {
@@ -44,12 +44,6 @@ static const int HERO_COST[] = {
 static const char *HERO_NAME[] = {"Hammerguard", "Master", "Berserker", "Scouter"};
 
 static const char *ACTIVE_SKILL[] = {"HammerAttack", "Blink", "Sacrifice", "SetObserver"};
-
-static const Tactic TACTICS[TAC_TARGETS_N] = {
-        MINE_POS[0], MINE_POS[1], MINE_POS[2], MINE_POS[3],
-        MINE_POS[4], MINE_POS[5], MINE_POS[6],
-        MILITARY_BASE_POS[0], MILITARY_BASE_POS[1]
-};
 
 static const int OBSERVE_POS_N = 2;
 
@@ -64,7 +58,7 @@ static int CAMP = -1;                       // which camp
 // levelUp
 static const double LEVEL_UP_COST = 0.5;    // 升级金钱比例
 // buyNewHero
-static int BUY_RANK = 42314312;             // 请参考hero_name
+static int BUY_RANK = 42314123;             // 请参考hero_name
 // callBack
 static const double CALLBACK_RATE = 0.6;    // 召回费的比率
 static const int CALLBACK_MIN_DIST2 = 600;  // 召回的必要最小距离
@@ -144,6 +138,12 @@ static const int BS_I = 7;
 static const int SCOUT_OK = 5;                  // 侦查完成的最大距离
 
 // need initilization
+static Tactic TACTICS[TAC_TARGETS_N] = {
+        MINE_POS[0], MINE_POS[1], MINE_POS[2], MINE_POS[3],
+        MINE_POS[4], MINE_POS[5], MINE_POS[6],
+        MILITARY_BASE_POS[0], MILITARY_BASE_POS[1],
+        Pos(),/*第一波*/
+};
 static vector<AssaultSquad *> AllSquads;        // 所有小队,默认初始化后需要调整参数
 static Pos ASSEMBLY_POINTS[TAC_TARGETS_N] = {   // 第一波的集散点,需要初始化修改
         TACTICS[0], Pos(44, 75), Pos(44, 75), Pos(105, 75),
@@ -196,7 +196,7 @@ void initilize();                                   // 初始化
 
 // Unit
 int buyNewCost(int cost_indx);                      // 当前购买新英雄成本,参数为HERO_NAME的索引
-bool canDamage(PUnit *unit, int round=0);           // 单位当前是否可以输出伤害
+bool canDamage(PUnit *unit, int round, Pos pos);           // 单位当前是否可以输出伤害
 PUnit *getFriendlyUnit(int id);                     // 节省时间
 
 // ============== Evaluation ===================
@@ -728,6 +728,18 @@ int enemyCamp() {
 }
 
 void initilize() {
+    // 初始化TACTICS
+    TACTICS[9] = (CAMP == 0) ? Pos(65, 63) : Pos(89, 86);
+
+    // 初始化OBSERVE_POS
+    OBSERVE_POS[1] = (CAMP == 0) ? Pos(20, 28) : Pos(123, 128);
+
+    // 初始化ASSEMBLY_POINTS
+    ASSEMBLY_POINTS[0] = (CAMP == 0) ? Pos(65, 63) : Pos(89, 86);
+
+    // 初始化FirstWave
+    FirstWave[0] = 1;
+
     // 初始化AllSquads
     if (AllSquads.empty()) {
         for (int i = 0; i <= MC_I; ++i) {                  // [0,1]
@@ -743,15 +755,6 @@ void initilize() {
 //            AllSquads.push_back(temp);
 //        }
     }
-
-    // 初始化OBSERVE_POS
-    OBSERVE_POS[1] = (CAMP == 0) ? Pos(20, 28) : Pos(123, 128);
-
-    // 初始化ASSEMBLY_POINTS
-    ASSEMBLY_POINTS[0] = (CAMP == 0) ? Pos(65, 63) : Pos(89, 86);
-
-    // 初始化FirstWave
-    FirstWave[0] = 1;
 }
 
 // data structure related
@@ -825,17 +828,18 @@ int buyNewCost(int cost_idx) {
 }
 
 
-bool canDamage(PUnit *unit, int round) {
+bool canDamage(PUnit *unit, int round, Pos pos) {
     PBuff *dizzy = const_cast<PBuff *>(unit->findBuff("Dizzy"));
     PSkill *attack = const_cast<PSkill *>(unit->findSkill("Attack"));
     PSkill *ham_atk = const_cast<PSkill *>(unit->findSkill("HammerAttack"));
+    int dist2 = dis2(pos, unit->pos);
 
     if (dizzy && dizzy->timeLeft >= round) {
         return false;
     }
 
-    if (attack->cd <= round
-        || (ham_atk && ham_atk->cd <= round)) {
+    if ((attack->cd <= round && unit->range >= dist2)
+        || (ham_atk && ham_atk->cd <= round && HAMMERATTACK_RANGE >= dist2)) {
         return true;
     } else {
         return false;
@@ -1303,10 +1307,20 @@ void Commander::handle(int phase) {
     /* Shared */
     // back to camp
     if (situ_camp == 1) {
+        bool push = false;
+        // 如果对手基地相对血量较低,不如直接攻击
+        if (target0 == en_camp_id && target1 == en_camp_id) {
+            PUnit *en_base = console->getUnit(enemyCamp() + 3);
+            if (en_base && en_base->hp < base->hp) {
+                push = true;
+            }
+        }
         // backup present tactic
-        BackupStore.push_back(target0);
-        BackupStore.push_back(target1);
-        changeTactic(camp_id, camp_id);
+        if (!push) {
+            BackupStore.push_back(target0);
+            BackupStore.push_back(target1);
+            changeTactic(camp_id, camp_id);
+        }
         return;
     }
 
@@ -1771,6 +1785,7 @@ void AssaultSquad::roundUpdate() {
 
 
 void AssaultSquad::SquadCommand() {
+    besiege = false;
     if (besiege) {
         crossBesiege();
     } else {
@@ -2013,14 +2028,45 @@ void Hero::checkHot() {
 /**************************Actions**************************/
 
 void Hero::cdWalk() {       // toedit 主要策略点
-    PUnit *nearest = nearestEnemy();
-    if (nearest == nullptr)
-        return;
+    Pos choice;
+    Pos choice1;
+    Pos choice2;
+    for (int i = 0; i < cur_friends.size(); ++i) {
+        PUnit *unit = cur_friends[i];
+        Pos p = unit->pos;
+        int dist2 = dis2(pos, p);
+        if (dist2 > BATTLE_RANGE) continue;
+        if (unit->typeId == 4 || unit->typeId == 6) {       // master or scouter
+            choice1 = p;
+        } else {
+            choice2 = p;
+        }
+    }
+    if (choice1 != Pos()) {
+        choice = choice1;
+#ifdef TEMP
+        logger << ">> [cdwalk] choice 1" << endl;
+#endif
+    } else if (choice2 != Pos()) {
+        choice = choice2;
+#ifdef TEMP
+        logger << ">> [cdwalk] choice 2" << endl;
+#endif
+    } else {
+        PUnit *nearest = nearestEnemy();
+        if (nearest == nullptr)
+            return;
 
-    Pos ref_p = nearest->pos;               // position of reference
-    // 撤离的距离为保持两者间距一个speed
-    Pos far_p = parallelChangePos(pos, ref_p, speed, true);
-    console->move(far_p, punit);        // go
+        Pos ref_p = nearest->pos;               // position of reference
+        // 撤离的距离为保持两者间距一个speed
+        Pos far_p = parallelChangePos(pos, ref_p, speed, true);
+        choice = far_p;
+#ifdef TEMP
+        logger << ">> [cdwalk] choice 3" << endl;
+#endif
+    }
+
+    console->move(choice, punit);        // go
 }
 
 
@@ -2229,11 +2275,7 @@ bool Berserker::timeToSkill() {
     // 不能被其他单位攻击
     for (int i = 0; i < vi_enemies.size(); ++i) {
         PUnit *pu = vi_enemies[i];
-        int dist2_pu = dis2(pu->pos, pos);
-        if (dist2_pu > pu->range) {
-            continue;               // can't reach me warn: not including the same unit
-        }
-        if (canDamage(pu, 1)) {     // if can damage
+        if (canDamage(pu, 1, pos)) {     // if can damage
             return false;
         }
     }
@@ -2474,6 +2516,7 @@ void Scouter::justMove() {
 /*
 [TESTED]
 Update:
+. cdwalk but not so efficient
 
 Fixed bugs:
 
@@ -2484,12 +2527,8 @@ Non-fixed problems:
 . call back efficiently
 
 TODO:
-. when taken control of center mine, take turns to come back and lvlup
-. when in inferior state, open 2 mines
-. level up strategy
-. !!dragging for backup heroes when lack of units
-. scan the mines and set the current tactic
-
+. disturbing enemy camp
+. robust attack strategy
 
  */
 
