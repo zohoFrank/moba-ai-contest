@@ -58,12 +58,16 @@ static int CAMP = -1;                       // which camp
 // levelUp
 static const double LEVEL_UP_COST = 0.5;    // 升级金钱比例
 // buyNewHero
-static int BUY_RANK = 42314123;             // 请参考hero_name
+static int BUY_RANK = 42314132;             // 请参考hero_name
 // callBack
 static const double CALLBACK_RATE = 0.6;    // 召回费的比率
 static const int CALLBACK_MIN_DIST2 = 600;  // 召回的必要最小距离
-static const int CALLBACK_LVLUP = 2000;      // 召回升级的最小经济水平
+static const int CALLBACK_LVLUP = 2000;     // 召回升级的最小经济水平
 static const int CALLBACK_RECV_HP = 2000;   // 召回补血的最小经济水平
+// buyLife
+static const int BUY_LIFE_ROUNDS = 60;      // 只允许前多少回合买活
+static const int BUY_LIFE_ROUNDS_LEFT = 5;  // 复活还剩回合数大于此,可考虑买活
+static const int BUY_LIFE_NEARBYS = 1;      // 基地周围有友方单位数大于此,考虑买活
 
 // clearOldInfo()
 static const int CLEAN_LIMIT = 6;           // 最多保留回合记录
@@ -74,7 +78,7 @@ static const double HP_FLEE_ALERT = 0.2;         // 血量预警百分比
 static const double HP_BACK_ALERT = 0.45;         // 回基地补血百分比
 
 static const int BATTLE_RANGE = 100;                // 战斗范围
-static const int ASSEMBLE_RANGE = 9;               // 集结范围
+static const int CROWD_RANGE = 4;               // 集结范围
 static const int BATTLE_FIELD = 4 * BATTLE_RANGE;   // 战区范围
 
 // Squad
@@ -117,8 +121,8 @@ static const int StickRounds = 50;                    // 初始保留战术的�
 static int TCounter = StickRounds;              // 设置战术倒计时
 
 // 战局判断
-static const int LEVEL1 = 8;                   // 判断第一界点,低于此不分队
-static const int LEVEL2 = 21;                   // 判断第二界点,高于此推基地
+static const int LEVEL1 = 10;                   // 判断第一界点,低于此不分队
+static const int LEVEL2 = 23;                   // 判断第二界点,高于此推基地
 static int TargetSitu[TAC_TARGETS_N] = {};        // 占据判断
 static int TargetCounter[TAC_TARGETS_N] = {};   // 战术计时
 static int FirstWave[TAC_TARGETS_N] = {};       // 第一波: 1-是, 0-否
@@ -377,7 +381,8 @@ public:
     bool can_skill;
     bool can_attack;
     bool besiege;                               // 抵近攻击/包围攻击,需要小队设置
-    bool emergent;                             // 有紧急情况,不需要继续别的指令
+    bool emergent;                              // 有紧急情况,不需要继续别的指令
+    Pos formation;                              // 队形调整的推荐目标
 
     /*********************************************************/
     virtual PUnit *nearestEnemy() const;
@@ -387,6 +392,7 @@ public:
     virtual bool timeToSkill() = 0;                     // 技能释放环境判断
     virtual bool timeToFlee();                          // 是否应该逃窜
     virtual void checkHot();                            // 检查一下热点目标是否有问题
+    // 返回一个推荐的调整队形的位置
 
     /**************************Actions**************************/
     // 仅move
@@ -1050,14 +1056,14 @@ void Commander::scanMines() {
         for (int k = 0; k < _sz; ++k) {
             Pos en_p = vi_enemies[k]->pos;
             int dist2 = dis2(TACTICS[m], en_p);
-            if (dist2 < BATTLE_FIELD) {
+            if (dist2 < BATTLE_RANGE) {
                 cnt_en++;
             }
         }
         for (int l = 0; l < _szf; ++l) {
             Pos p = cur_friends[l]->pos;
             int dist2 = dis2(TACTICS[m], p);
-            if (dist2 < BATTLE_FIELD) {
+            if (dist2 < BATTLE_RANGE) {
                 cnt_f++;
             }
         }
@@ -1193,6 +1199,11 @@ void Commander::handle(int phase) {
     int target1 = SquadTargets[1];
 
     // 开局
+    if (Round < 24) {
+        SquadTargets[0] = 9;
+        SquadTargets[1] = 9;
+        return;
+    }
     if (Round < 2 * StickRounds) {
         SquadTargets[0] = 0;
         SquadTargets[1] = 0;
@@ -1284,13 +1295,23 @@ void Commander::handle(int phase) {
     PUnit *base = const_cast<PUnit *>(console->getMilitaryBase());
     int situ_camp = TargetSitu[camp_id];
     if (target0 == camp_id && target1 == camp_id) {
-        if ((situ_camp == 0 || situ_camp == 2) && base->hp > base->max_hp / 2) {
+        if ((situ_camp == 0 || situ_camp == 2)
+            && base->hp > base->max_hp / 2) {
             int t0 = BackupStore[0];
             int t1 = BackupStore[1];
-            BackupStore.clear();
             changeTactic(t0, t1);
+            BackupStore.clear();
         }
         return;
+    }
+
+    // camp + other
+    if (target0 == camp_id && target1 != camp_id) {
+        if (base->hp > base->max_hp / 2) {
+            int t0 = BackupStore[0];
+            changeTactic(t0, target1);
+            BackupStore.clear();
+        }
     }
 
     // enemy camp
@@ -1304,7 +1325,7 @@ void Commander::handle(int phase) {
         // todo 可以考虑风筝召回单位的对手
     }
 
-    /* Shared */
+    /********************************************************************/
     // back to camp
     if (situ_camp == 1) {
         bool push = false;
@@ -1416,8 +1437,49 @@ void Commander::levelUp() {  // toedit 主要策略点
 
 
 void Commander::buyLife() {
-    // todo 暂时没有发现买活的意义
-    return;
+    if (SquadTargets[0] != 0 || SquadTargets[1] != 0 || Round > BUY_LIFE_ROUNDS)
+        return;
+
+    // base周边有朋友单位的,且reviving单位还剩x个回合以上的,复活
+    int nearby = 0;
+    vector<PUnit *> to_revive;
+    to_revive.clear();
+    Pos camp = MILITARY_BASE_POS[CAMP];
+    int cost = 0;
+    for (int i = 0; i < cur_friends.size(); ++i) {
+        PUnit *unit = cur_friends[i];
+        PBuff *revive = const_cast<PBuff *>(unit->findBuff("Reviving"));
+        // nearby units (not dead)
+        int dist2 = dis2(unit->pos, camp);
+        if (dist2 < BATTLE_FIELD && !revive && unit->hp > unit->max_hp * HP_BACK_ALERT) {
+            nearby++;
+        }
+        // possible reviving units
+        if (revive && revive->timeLeft >= BUY_LIFE_ROUNDS_LEFT) {
+            cost += console->buyBackCost(unit->level);
+            to_revive.push_back(unit);
+        }
+        if (cost > Economy) {
+            cost -= console->buyBackCost(unit->level);
+            to_revive.pop_back();
+        }
+    }
+#ifdef TEMP
+        logger << ">> [buylife] nearbys = " << nearby << endl;
+        logger << ">> [buylife] torevive.size = " << to_revive.size() << endl;
+#endif
+
+    // sum up
+    if (nearby >= BUY_LIFE_NEARBYS) {
+        for (int i = 0; i < to_revive.size(); ++i) {
+            PUnit *unit = to_revive[i];
+            console->buyBackHero(unit);
+#ifdef TEMP
+            logger << ">> [buylife] buy life of " << unit->name;
+            logger << " id = " << unit->id << endl;
+#endif
+        }
+    }
 }
 
 
@@ -1425,6 +1487,7 @@ void Commander::spendMoney() {
     // todo 还没有加买活,策略不佳
     buyNewHero();
     levelUp();
+    buyLife();
 }
 
 
@@ -1595,24 +1658,23 @@ void AssaultSquad::lockHot() {
         }
     }
 
-    vector<PUnit *> win_or_die;
-    vector<PUnit *> wait_revive;
+//    vector<PUnit *> win_or_die;
+//    vector<PUnit *> wait_revive;
 
     // 寻找最弱单位
     int index = -1;
-    double min = BIG_INT;
+    double min = 1.0 * BIG_INT;
     // 特殊buff
     int _sz = (int) sector_en.size();
     for (int i = 0; i < _sz; ++i) {
-        PUnit *en = sector_en[i];
-        // WinOrDie
-        if (en->findBuff("WinOrDie")) {
-            win_or_die.push_back(en);
-        }
-        // WaitRevive
-        if (en->findBuff("WinOrDie")) {
-            wait_revive.push_back(en);
-        }
+//        // WinOrDie
+//        if (en->findBuff("WinOrDie")) {
+//            win_or_die.push_back(en);
+//        }
+//        // WaitRevive
+//        if (en->findBuff("WinOrDie")) {
+//            wait_revive.push_back(en);
+//        }
 
         // 最弱
         double score = unitDefScore(sector_en[i]);
@@ -1623,26 +1685,36 @@ void AssaultSquad::lockHot() {
     }
 
     /* 结算 */
-    // 特殊buff
-    if (!win_or_die.empty()) {
-        hot = win_or_die[0];
-        hot_id = hot->id;
-        return;
-    }
-    if (!wait_revive.empty()) {
-        hot = wait_revive[0];
-        hot_id = hot->id;
-        return;
-    }
+//    // 特殊buff
+//    if (!win_or_die.empty()) {
+//        hot = win_or_die[0];
+//        hot_id = hot->id;
+//        return;
+//    }
+//    if (!wait_revive.empty()) {
+//        hot = wait_revive[0];
+//        hot_id = hot->id;
+//        return;
+//    }
 
 
-    // 最弱
     if (index == -1) {
         hot = nullptr;
         hot_id = -1;
     } else {
         hot = sector_en[index];
         hot_id = hot->id;
+        int min_dist2 = BIG_INT;
+        for (int j = 0; j < cur_friends.size(); ++j) {
+            int dist2 = dis2(cur_friends[j]->pos, hot->pos);
+            if (dist2 < min_dist2) {
+                min_dist2 = dist2;
+            }
+        }
+        if (min_dist2 > BATTLE_RANGE) {
+            hot = nullptr;
+            hot_id = -1;
+        }
     }
 }
 
@@ -1652,18 +1724,19 @@ void AssaultSquad::setHeroes() {
     for (int i = 0; i < _sz; ++i) {
         int hero_id = member_id[i];
         PUnit *unit = getFriendlyUnit(hero_id);
+        PBuff *revive = const_cast<PBuff *>(unit->findBuff("Reviving"));
         Hero *hero = nullptr;
         switch (unit->typeId) {
             case 3:
                 hero = new HammerGuard(unit, hot, target_id);
-                leader = unit;
+                if (!revive) leader = unit;
                 break;
             case 4:
                 hero = new Master(unit, hot, target_id);
                 break;
             case 5:
                 hero = new Berserker(unit, hot, target_id);
-                leader = unit;
+                if (!revive) leader = unit;
                 break;
             case 6:
                 hero = new Scouter(unit, hot, target_id);
@@ -1785,7 +1858,6 @@ void AssaultSquad::roundUpdate() {
 
 
 void AssaultSquad::SquadCommand() {
-    besiege = false;
     if (besiege) {
         crossBesiege();
     } else {
@@ -1980,7 +2052,7 @@ bool Hero::timeToFlee() {
 
     // 区域没有友军
     int dist2target = dis2(pos, TACTICS[target_id]);
-    if (dist2target < BATTLE_FIELD) {
+    if (dist2target < BATTLE_FIELD && target_id == 0) {
         int near_friends = 0;
         for (int i = 0; i < cur_friends.size(); ++i) {
             PUnit *unit = cur_friends[i];
@@ -1990,6 +2062,7 @@ bool Hero::timeToFlee() {
                 near_friends++;
             }
         }
+
         int near_enemies = 0;
         for (int j = 0; j < vi_enemies.size(); ++j) {
             PUnit *unit = vi_enemies[j];
@@ -1998,7 +2071,17 @@ bool Hero::timeToFlee() {
                 near_enemies++;
             }
         }
-        if (near_friends <= 0 && near_enemies >= 2) {
+        int near_monsters = 0;
+        for (int k = 0; k < vi_monsters.size(); ++k) {
+            PUnit *monster = vi_monsters[k];
+            int dist2 = dis2(monster->pos, TACTICS[target_id]);
+            if (!vi_monsters[k]->findBuff("Reviving") && dist2 < BATTLE_FIELD) {
+                near_monsters++;
+            }
+        }
+
+        if (near_friends <= 0
+            && (near_enemies >= 2 || near_monsters > 0)) {
             return true;
         }
     }
@@ -2028,30 +2111,9 @@ void Hero::checkHot() {
 /**************************Actions**************************/
 
 void Hero::cdWalk() {       // toedit 主要策略点
-    Pos choice;
-    Pos choice1;
-    Pos choice2;
-    for (int i = 0; i < cur_friends.size(); ++i) {
-        PUnit *unit = cur_friends[i];
-        Pos p = unit->pos;
-        int dist2 = dis2(pos, p);
-        if (dist2 > BATTLE_RANGE) continue;
-        if (unit->typeId == 4 || unit->typeId == 6) {       // master or scouter
-            choice1 = p;
-        } else {
-            choice2 = p;
-        }
-    }
-    if (choice1 != Pos()) {
-        choice = choice1;
-#ifdef TEMP
-        logger << ">> [cdwalk] choice 1" << endl;
-#endif
-    } else if (choice2 != Pos()) {
-        choice = choice2;
-#ifdef TEMP
-        logger << ">> [cdwalk] choice 2" << endl;
-#endif
+    Pos walkto;
+    if (formation != Pos()) {
+        walkto = formation;
     } else {
         PUnit *nearest = nearestEnemy();
         if (nearest == nullptr)
@@ -2060,13 +2122,14 @@ void Hero::cdWalk() {       // toedit 主要策略点
         Pos ref_p = nearest->pos;               // position of reference
         // 撤离的距离为保持两者间距一个speed
         Pos far_p = parallelChangePos(pos, ref_p, speed, true);
-        choice = far_p;
+        walkto = far_p;
 #ifdef TEMP
-        logger << ">> [cdwalk] choice 3" << endl;
+        logger << ">> [cdwalk] cdwalk to ";
+        logger << walkto << endl;
 #endif
     }
 
-    console->move(choice, punit);        // go
+    console->move(walkto, punit);        // go
 }
 
 
@@ -2091,7 +2154,7 @@ void Hero::fastFlee() {
 /***********************************************************/
 
 Hero::Hero(int _id, int _hot, int _tactic) :
-        id(_id), hot_id(_hot), target_id(_tactic){
+        id(_id), hot_id(_hot), target_id(_tactic) {
     punit = getFriendlyUnit(_id);
     target = TACTICS[target_id];
     hot = console->getUnit(hot_id);
@@ -2183,6 +2246,9 @@ void Hero::HeroAct() {
 void Hero::justMove() {     // assert: out of field or hot = nullptr
     if (hp < HP_BACK_ALERT * punit->max_hp) {
         console->move(MILITARY_BASE_POS[CAMP], punit);
+#ifdef LOG
+        logger << "[mov] recover hp to base" << endl;
+#endif
     } else {
         console->move(target, punit);
 #ifdef LOG
@@ -2267,7 +2333,7 @@ bool Berserker::timeToSkill() {
 
     // hot必须在攻击范围内
     int dist2 = dis2(hot->pos, pos);
-    if (dist2 > range) {
+    if (dist2 > speed) {
         target = hot->pos;
         return false;
     }
@@ -2350,8 +2416,13 @@ Pos Master::blinkTarget(bool chase) {
         Pos chase_p = parallelChangePos(pos, hot->pos, dist2 - range / 2, false);
         return chase_p;
     } else {
-        Pos flee_p = parallelChangePos(pos, hot->pos, BLINK_RANGE, true);
-        return flee_p;
+        PUnit *nearest = nearestEnemy();
+        if (nearest == nullptr) {
+            return Pos();
+        } else {
+            Pos flee_p = parallelChangePos(pos, nearest->pos, BLINK_RANGE, true);
+            return flee_p;
+        }
     }
 }
 
@@ -2471,9 +2542,9 @@ Scouter::Scouter(PUnit *me, PUnit *hot, int t_id) :
 
 
 void Scouter::Emergency() {
-    if (Hero::timeToFlee()) {
+    if (timeToFlee()) {
         emergent = true;
-        Hero::fastFlee();
+        fastFlee();
         return;
     }
 
