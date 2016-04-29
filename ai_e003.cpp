@@ -74,7 +74,7 @@ static const int CLEAN_LIMIT = 6;           // 最多保留回合记录
 static const int CLEAN_NUMS = 2;            // 超过最多保留记录后,一次清理数据组数
 
 // Hero
-static const double HP_FLEE_ALERT = 0.2;         // 血量预警百分比
+static const double HP_FLEE_ALERT = 0.25;         // 血量预警百分比
 static const double HP_BACK_ALERT = 0.45;         // 回基地补血百分比
 
 static const int BATTLE_RANGE = 100;                // 战斗范围
@@ -296,6 +296,7 @@ public:
     virtual void clean();               // 静态对象,每回合开始需要重置一些东西
     virtual void resetTacMonitor(int _n = StickRounds);   // 重设计数器/判断器
     virtual bool firstWave();           // 判断第一波的接口
+    virtual Pos crowdedPos();           // 小队紧凑调整的目标设置
 
     // construct
     virtual void setOthers() = 0;       // 用来给子类设置自身独有的成员变量
@@ -1591,6 +1592,24 @@ bool AssaultSquad::firstWave() {
 }
 
 
+Pos AssaultSquad::crowdedPos() {
+    Pos recommand;
+    for (int i = 0; i < members.size(); ++i) {
+        Hero *hero = members[i];
+        Pos p = hero->pos;
+        int dist2 = dis2(p, TACTICS[target_id]);
+        if (dist2 > BATTLE_RANGE) continue;
+
+        if (hero->type == 4) {          // master
+            recommand = p;
+            break;
+        }
+    }
+
+    return recommand;           // warn 可能为-1,-1
+}
+
+
 void AssaultSquad::getAllCmdInfo() {
     member_id = SquadMembers[id];
     target_id = SquadTargets[id];
@@ -1721,6 +1740,7 @@ void AssaultSquad::lockHot() {
 
 void AssaultSquad::setHeroes() {
     int _sz = (int) member_id.size();
+    leader = nullptr;
     for (int i = 0; i < _sz; ++i) {
         int hero_id = member_id[i];
         PUnit *unit = getFriendlyUnit(hero_id);
@@ -1729,14 +1749,13 @@ void AssaultSquad::setHeroes() {
         switch (unit->typeId) {
             case 3:
                 hero = new HammerGuard(unit, hot, target_id);
-                if (!revive) leader = unit;
                 break;
             case 4:
                 hero = new Master(unit, hot, target_id);
+                if (!revive) leader = unit;
                 break;
             case 5:
                 hero = new Berserker(unit, hot, target_id);
-                if (!revive) leader = unit;
                 break;
             case 6:
                 hero = new Scouter(unit, hot, target_id);
@@ -1748,6 +1767,9 @@ void AssaultSquad::setHeroes() {
                 break;
         }
         members.push_back(hero);
+    }
+    if (leader == nullptr && !members.empty()) {
+        leader = members[0]->punit;
     }
 }
 
@@ -2129,7 +2151,7 @@ void Hero::cdWalk() {       // toedit 主要策略点
 #endif
     }
 
-    console->move(walkto, punit);        // go
+    console->move(target, punit);        // go
 }
 
 
@@ -2217,7 +2239,9 @@ void Hero::Emergency() {
         return;
     }
 
-    if (!besiege) {
+    if (besiege) {
+        justMove();
+    } else {
         if (!can_skill && !can_attack) {
             emergent = true;
             cdWalk();
@@ -2408,7 +2432,7 @@ void Master::fastFlee() {
 
 Pos Master::blinkTarget(bool chase) {
     // 进攻型
-    if (hot == nullptr)
+    if (hot == nullptr || !can_skill)
         return Pos(-1, -1);
 
     int dist2 = dis2(hot->pos, pos);
@@ -2587,10 +2611,11 @@ void Scouter::justMove() {
 /*
 [TESTED]
 Update:
-. cdwalk but not so efficient
+. leader = master
+. hp alert increased
 
 Fixed bugs:
-
+. master blink
 
 Non-fixed problems:
 . sqaud formation
