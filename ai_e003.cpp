@@ -58,7 +58,7 @@ static int CAMP = -1;                       // which camp
 // levelUp
 static const double LEVEL_UP_COST = 0.5;    // 升级金钱比例
 // buyNewHero
-static int BUY_RANK = 42314132;             // 请参考hero_name
+static int BUY_RANK = 42313142;             // 请参考hero_name
 // callBack
 static const double CALLBACK_RATE = 0.6;    // 召回费的比率
 static const int CALLBACK_MIN_DIST2 = 600;  // 召回的必要最小距离
@@ -1205,7 +1205,7 @@ void Commander::handle(int phase) {
         SquadTargets[1] = 9;
         return;
     }
-    if (Round < 2 * StickRounds) {
+    if (Round < 3 * StickRounds) {
         SquadTargets[0] = 0;
         SquadTargets[1] = 0;
         return;
@@ -1723,17 +1723,6 @@ void AssaultSquad::lockHot() {
     } else {
         hot = sector_en[index];
         hot_id = hot->id;
-        int min_dist2 = BIG_INT;
-        for (int j = 0; j < cur_friends.size(); ++j) {
-            int dist2 = dis2(cur_friends[j]->pos, hot->pos);
-            if (dist2 < min_dist2) {
-                min_dist2 = dist2;
-            }
-        }
-        if (min_dist2 > BATTLE_RANGE) {
-            hot = nullptr;
-            hot_id = -1;
-        }
     }
 }
 
