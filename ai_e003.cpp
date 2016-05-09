@@ -122,7 +122,7 @@ static int TCounter = StickRounds;              // 设置战术倒计时
 
 // 战局判断
 static const int LEVEL1 = 10;                   // 判断第一界点,低于此不分队
-static const int LEVEL2 = 23;                   // 判断第二界点,高于此推基地
+static const int LEVEL2 = 20;                   // 判断第二界点,高于此推基地
 static int TargetSitu[TAC_TARGETS_N] = {};        // 占据判断
 static int TargetCounter[TAC_TARGETS_N] = {};   // 战术计时
 static int FirstWave[TAC_TARGETS_N] = {};       // 第一波: 1-是, 0-否
@@ -1083,7 +1083,7 @@ void Commander::scanMines() {
             }
         } else {
             // others - -1:与非野单位交战, 1:打野采矿状态
-            if (cnt_en != 0) {
+            if (cnt_en > cnt_f) {
                 TargetSitu[m] = -1;
                 TargetCounter[m] = 0;
             } else {
@@ -1296,23 +1296,13 @@ void Commander::handle(int phase) {
     PUnit *base = const_cast<PUnit *>(console->getMilitaryBase());
     int situ_camp = TargetSitu[camp_id];
     if (target0 == camp_id && target1 == camp_id) {
-        if ((situ_camp == 0 || situ_camp == 2)
-            && base->hp > base->max_hp / 2) {
+        if (situ_camp == 0 || situ_camp == 2) {
             int t0 = BackupStore[0];
             int t1 = BackupStore[1];
             changeTactic(t0, t1);
             BackupStore.clear();
         }
         return;
-    }
-
-    // camp + other
-    if (target0 == camp_id && target1 != camp_id) {
-        if (base->hp > base->max_hp / 2) {
-            int t0 = BackupStore[0];
-            changeTactic(t0, target1);
-            BackupStore.clear();
-        }
     }
 
     // enemy camp
@@ -1524,31 +1514,6 @@ void Commander::callBack() {
             }
         }
     }
-
-    // 召回防守
-    int target0 = SquadTargets[0];
-    int target1 = SquadTargets[1];
-    int camp_id = 7 + CAMP;
-    int cost = 0;
-    vector<PUnit *> to_call;
-    if (target0 == camp_id && target1 == camp_id) {
-        for (int i = 0; i < cur_friends.size(); ++i) {
-            PUnit *unit = cur_friends[i];
-            int dist2 = dis2(unit->pos, TACTICS[camp_id]);
-            if (dist2 > 9 * MILITARY_BASE_VIEW) {
-                cost += console->callBackCost(unit->level);
-                to_call.push_back(unit);
-            }
-            if (cost > CALLBACK_RATE * Economy) {
-                to_call.pop_back();
-                break;
-            }
-        }
-
-        for (auto it = to_call.begin(); it != to_call.end(); ++it) {
-            console->callBackHero(*it);
-        }
-    }
 }
 
 
@@ -1598,7 +1563,7 @@ Pos AssaultSquad::crowdedPos() {
         Hero *hero = members[i];
         Pos p = hero->pos;
         int dist2 = dis2(p, TACTICS[target_id]);
-        if (dist2 > BATTLE_RANGE) continue;
+        if (dist2 > battle_range) continue;
 
         if (hero->type == 4) {          // master
             recommand = p;
@@ -1661,9 +1626,10 @@ void AssaultSquad::lockHot() {
         return;
     }
 
+    // 如果没有敌人攻击Observer
     if (sector_en.size() == 0) {
         UnitFilter filter;
-        filter.setAreaFilter(new Circle(TACTICS[target_id], BATTLE_RANGE), "w");
+        filter.setAreaFilter(new Circle(TACTICS[target_id], battle_range), "w");
         filter.setTypeFilter("Observer", "w");
         filter.setAvoidFilter("Mine", "w");
         vector<PUnit *> observers = console->enemyUnits(filter);
@@ -1767,9 +1733,10 @@ void AssaultSquad::crossBesiege() {
     // set target for non-leader
     for (int j = 0; j < members.size(); ++j) {
         Hero *hero = members[j];
+        int dist2leader = dis2(leader->pos, hero->pos);
         if (hero->id == leader->id) {
             continue;
-        } else {
+        } else if (dist2leader < BATTLE_FIELD) {
             hero->target = leader->pos;
         }
     }
@@ -1830,7 +1797,12 @@ void AssaultSquad::setBesiege() {
 AssaultSquad::AssaultSquad(int _id) {
     id = _id;
     situation = 0;
-    battle_range = BATTLE_RANGE;
+    // battle range
+    if (target_id == 7 + CAMP) {
+        battle_range = 4 * BATTLE_FIELD;
+    } else {
+        battle_range = BATTLE_RANGE;
+    }
     stick_counter = StickRounds;
     clean();
 
